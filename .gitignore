@@ -1,0 +1,73 @@
+# =========================
+# Environment / Secrets
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# Node
+# =========================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# =========================
+# Frontend
+# =========================
+frontend/dist/
+frontend/build/
+frontend/.vite/
+
+# =========================
+# Backend generated files
+# =========================
+backend/public/audio/*
+backend/public/videos/*
+backend/public/temp/*
+backend/public/voices/*
+
+# Keep empty directories in Git
+!backend/public/audio/.gitkeep
+!backend/public/videos/.gitkeep
+!backend/public/temp/.gitkeep
+!backend/public/voices/.gitkeep
+
+# =========================
+# Logs
+# =========================
+*.log
+logs/
+
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# Editor
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# Misc
+# =========================
+*.tmp
+*.cache
+# Windows shortcuts
+*.lnk
+
+# Generated images
+backend/public/images/*
+!backend/public/images/.gitkeep
+
+# Generated scene videos
+backend/public/scene-videos/*
+!backend/public/scene-videos/.gitkeep
+
+# Generated output
+backend/public/output/*
+backend/public/uploads/*
