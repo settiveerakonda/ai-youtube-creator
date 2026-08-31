@@ -2,7 +2,6 @@ const express = require("express");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const googleTTS = require("google-tts-api");
 
 const {
   createUserVoice,
@@ -12,475 +11,364 @@ const {
   setActiveVoice,
 } = require("../services/userVoiceService");
 
-const router = express.Router();
+const router =
+  express.Router();
 
-// ============================================================
-// VOICE DIRECTORY
-// ============================================================
+// ======================================================
+// DIRECTORIES
+// ======================================================
 
-const VOICE_DIR = path.join(
-  __dirname,
-  "..",
-  "public",
-  "voices"
-);
+const VOICE_DIR =
+  path.join(
+    __dirname,
+    "..",
+    "public",
+    "voices"
+  );
 
-const AUDIO_DIR = path.join(
-  __dirname,
-  "..",
-  "public",
-  "audio"
-);
+const AUDIO_DIR =
+  path.join(
+    __dirname,
+    "..",
+    "public",
+    "audio"
+  );
 
-fs.mkdirSync(VOICE_DIR, {
-  recursive: true,
-});
-
-fs.mkdirSync(AUDIO_DIR, {
-  recursive: true,
-});
-
-// ============================================================
-// MULTER STORAGE
-// ============================================================
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, VOICE_DIR);
-  },
-
-  filename: (req, file, cb) => {
-    const extension = path.extname(file.originalname);
-
-    const fileName =
-      `voice_${Date.now()}${extension}`;
-
-    cb(null, fileName);
-  },
-});
-
-// ============================================================
-// FILE FILTER
-// ============================================================
-
-const fileFilter = (req, file, cb) => {
-  const allowedTypes = [
-    "audio/mpeg",
-    "audio/mp3",
-    "audio/wav",
-    "audio/x-wav",
-    "audio/mp4",
-    "audio/m4a",
-    "audio/ogg",
-    "audio/webm",
-  ];
-
-  if (allowedTypes.includes(file.mimetype)) {
-    cb(null, true);
-  } else {
-    cb(
-      new Error("Only audio files are allowed")
-    );
+fs.mkdirSync(
+  VOICE_DIR,
+  {
+    recursive: true,
   }
-};
+);
 
-// ============================================================
+fs.mkdirSync(
+  AUDIO_DIR,
+  {
+    recursive: true,
+  }
+);
+
+// ======================================================
 // MULTER
-// ============================================================
+// ======================================================
 
-const upload = multer({
-  storage,
-  fileFilter,
+const storage =
+  multer.diskStorage({
+    destination:
+      (req, file, cb) => {
+        cb(
+          null,
+          VOICE_DIR
+        );
+      },
 
-  limits: {
-    fileSize: 20 * 1024 * 1024,
-  },
-});
+    filename:
+      (req, file, cb) => {
+        const extension =
+          path.extname(
+            file.originalname
+          ) || ".webm";
 
-// ============================================================
-// UPLOAD USER VOICE
-// ============================================================
+        cb(
+          null,
+          `voice_${Date.now()}${extension}`
+        );
+      },
+  });
+
+const upload =
+  multer({
+    storage,
+
+    limits: {
+      fileSize:
+        20 * 1024 * 1024,
+    },
+
+    fileFilter:
+      (req, file, cb) => {
+        const allowed = [
+          "audio/mpeg",
+          "audio/mp3",
+          "audio/wav",
+          "audio/x-wav",
+          "audio/mp4",
+          "audio/m4a",
+          "audio/ogg",
+          "audio/webm",
+        ];
+
+        if (
+          allowed.includes(
+            file.mimetype
+          )
+        ) {
+          cb(null, true);
+        } else {
+          cb(
+            new Error(
+              "Only MP3, WAV, M4A, OGG or WEBM audio is allowed."
+            )
+          );
+        }
+      },
+  });
+
+// ======================================================
+// UPLOAD + CLONE MY VOICE
+// ======================================================
 
 router.post(
   "/upload",
   upload.single("voice"),
   async (req, res) => {
     try {
-      const {
-        userId,
-        name,
-        language,
-      } = req.body;
+      console.log(
+        "======================================"
+      );
 
-      if (!userId) {
-        return res.status(400).json({
-          success: false,
-          message: "userId is required",
-        });
-      }
+      console.log(
+        "🎙️ MY VOICE UPLOAD"
+      );
+
+      console.log(
+        "======================================"
+      );
 
       if (!req.file) {
         return res.status(400).json({
           success: false,
-          message: "Voice file is required",
+
+          message:
+            "Please record or upload a voice sample.",
         });
       }
 
       const voice =
         await createUserVoice({
-          userId,
-          name,
-          language,
-          file: req.file,
+          name:
+            req.body.name ||
+            "My Voice",
+
+          language:
+            req.body.language ||
+            "English",
+
+          file:
+            req.file,
         });
 
       return res.status(201).json({
         success: true,
 
         message:
-          "Voice uploaded successfully",
+          "Your voice was cloned successfully.",
 
         voice: {
-          id: voice._id,
-          name: voice.name,
-          fileUrl: voice.fileUrl,
-          language: voice.language,
-          status: voice.status,
+          id:
+            voice._id,
+
+          name:
+            voice.name,
+
+          language:
+            voice.language,
+
+          status:
+            voice.status,
+
+          provider:
+            voice.provider,
+
+          externalVoiceId:
+            voice.externalVoiceId,
+
+          fileUrl:
+            voice.fileUrl,
         },
+
+        voiceId:
+          voice._id.toString(),
       });
+
     } catch (error) {
       console.error(
         "❌ Voice upload error:",
         error.message
       );
 
+      if (
+        req.file?.path &&
+        fs.existsSync(
+          req.file.path
+        )
+      ) {
+        try {
+          fs.unlinkSync(
+            req.file.path
+          );
+        } catch {}
+      }
+
       return res.status(500).json({
         success: false,
-        message: error.message,
+
+        message:
+          error.message ||
+          "Voice upload failed.",
       });
     }
   }
 );
 
-// ============================================================
-// GET USER VOICES
-// ============================================================
+// ======================================================
+// GET MY VOICES
+// ======================================================
 
 router.get(
-  "/user/:userId",
+  "/my-voices",
   async (req, res) => {
     try {
       const voices =
-        await getUserVoices(
-          req.params.userId
+        await getUserVoices();
+
+      return res.json({
+        success: true,
+
+        voices:
+          voices.map(
+            (voice) => ({
+              id:
+                voice._id,
+
+              name:
+                voice.name,
+
+              language:
+                voice.language,
+
+              status:
+                voice.status,
+
+              provider:
+                voice.provider,
+
+              externalVoiceId:
+                voice.externalVoiceId,
+
+              fileUrl:
+                voice.fileUrl,
+
+              isActive:
+                voice.isActive,
+            })
+          ),
+      });
+
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+
+        message:
+          error.message,
+      });
+    }
+  }
+);
+
+// ======================================================
+// GET ONE VOICE
+// ======================================================
+
+router.get(
+  "/:voiceId",
+  async (req, res) => {
+    try {
+      const voice =
+        await getUserVoice(
+          req.params.voiceId
         );
 
       return res.json({
         success: true,
-        voices,
-      });
-    } catch (error) {
-      return res.status(500).json({
-        success: false,
-        message: error.message,
-      });
-    }
-  }
-);
 
-// ============================================================
-// GET SINGLE VOICE
-// ============================================================
-
-router.get(
-  "/:userId/:voiceId",
-  async (req, res) => {
-    try {
-      const voice =
-        await getUserVoice({
-          userId:
-            req.params.userId,
-
-          voiceId:
-            req.params.voiceId,
-        });
-
-      return res.json({
-        success: true,
         voice,
       });
+
     } catch (error) {
       return res.status(404).json({
         success: false,
-        message: error.message,
+
+        message:
+          error.message,
       });
     }
   }
 );
 
-// ============================================================
-// SET ACTIVE VOICE
-// ============================================================
+// ======================================================
+// SET ACTIVE
+// ======================================================
 
 router.put(
-  "/:userId/:voiceId/activate",
+  "/:voiceId/active",
   async (req, res) => {
     try {
       const voice =
-        await setActiveVoice({
-          userId:
-            req.params.userId,
+        await setActiveVoice(
+          req.params.voiceId
+        );
 
-          voiceId:
-            req.params.voiceId,
-        });
+      return res.json({
+        success: true,
+
+        voice,
+      });
+
+    } catch (error) {
+      return res.status(500).json({
+        success: false,
+
+        message:
+          error.message,
+      });
+    }
+  }
+);
+
+// ======================================================
+// DELETE
+// ======================================================
+
+router.delete(
+  "/:voiceId",
+  async (req, res) => {
+    try {
+      await deleteUserVoice(
+        req.params.voiceId
+      );
 
       return res.json({
         success: true,
 
         message:
-          "Voice activated successfully",
-
-        voice,
+          "Voice deleted successfully.",
       });
+
     } catch (error) {
-      return res.status(404).json({
+      return res.status(500).json({
         success: false,
-        message: error.message,
+
+        message:
+          error.message,
       });
     }
   }
 );
 
-// ============================================================
-// DELETE VOICE
-// ============================================================
-
-router.delete(
-  "/:userId/:voiceId",
-  async (req, res) => {
-    try {
-      const result =
-        await deleteUserVoice({
-          userId:
-            req.params.userId,
-
-          voiceId:
-            req.params.voiceId,
-        });
-
-      return res.json(result);
-    } catch (error) {
-      return res.status(404).json({
-        success: false,
-        message: error.message,
-      });
-    }
-  }
-);
-
-// ============================================================
-// GOOGLE TTS FALLBACK
-// ============================================================
-
-const generateGoogleFallbackVoice = async ({
-  text,
-  language,
-  sceneNumber,
-}) => {
-  console.log(
-    `🆓 Using Google TTS fallback for Scene ${sceneNumber}...`
-  );
-
-  const lang =
-    String(language || "")
-      .toLowerCase()
-      .includes("telugu")
-      ? "te"
-      : "en";
-
-  const audioParts =
-    await googleTTS.getAllAudioBase64(
-      text,
-      {
-        lang,
-        slow: false,
-        host: "https://translate.google.com",
-        timeout: 30000,
-      }
-    );
-
-  if (
-    !audioParts ||
-    !Array.isArray(audioParts) ||
-    audioParts.length === 0
-  ) {
-    throw new Error(
-      `Google TTS returned no audio for Scene ${sceneNumber}`
-    );
-  }
-
-  const timestamp = Date.now();
-
-  const tempFiles = [];
-
-  try {
-    // --------------------------------------------------------
-    // SAVE GOOGLE TTS PARTS
-    // --------------------------------------------------------
-
-    for (
-      let i = 0;
-      i < audioParts.length;
-      i++
-    ) {
-      const tempName =
-        `google_scene_${sceneNumber}_part_${i}_${timestamp}.mp3`;
-
-      const tempPath =
-        path.join(
-          AUDIO_DIR,
-          tempName
-        );
-
-      fs.writeFileSync(
-        tempPath,
-        Buffer.from(
-          audioParts[i].base64,
-          "base64"
-        )
-      );
-
-      tempFiles.push(tempPath);
-    }
-
-    // --------------------------------------------------------
-    // CONCAT FILE
-    // --------------------------------------------------------
-
-    const finalName =
-      `video_scene_${sceneNumber}_${timestamp}_google.mp3`;
-
-    const finalPath =
-      path.join(
-        AUDIO_DIR,
-        finalName
-      );
-
-    // For a single Google chunk, directly use it.
-    if (tempFiles.length === 1) {
-      fs.copyFileSync(
-        tempFiles[0],
-        finalPath
-      );
-    } else {
-      // Use ffmpeg from server.js indirectly is not available here,
-      // so use Node child_process.
-      const { execFile } =
-        require("child_process");
-
-      const ffmpegPath =
-        require("ffmpeg-static");
-
-      const concatFile =
-        path.join(
-          AUDIO_DIR,
-          `google_concat_${sceneNumber}_${timestamp}.txt`
-        );
-
-      const concatContent =
-        tempFiles
-          .map(
-            (file) =>
-              `file '${file
-                .replace(/\\/g, "/")
-                .replace(
-                  /'/g,
-                  "'\\''"
-                )}'`
-          )
-          .join("\n");
-
-      fs.writeFileSync(
-        concatFile,
-        concatContent,
-        "utf8"
-      );
-
-      await new Promise(
-        (resolve, reject) => {
-          execFile(
-            ffmpegPath,
-            [
-              "-y",
-              "-f",
-              "concat",
-              "-safe",
-              "0",
-              "-i",
-              concatFile,
-              "-c:a",
-              "libmp3lame",
-              "-b:a",
-              "128k",
-              finalPath,
-            ],
-            {
-              windowsHide: true,
-            },
-            (error, stdout, stderr) => {
-              if (error) {
-                console.error(
-                  "❌ Google TTS FFmpeg error:",
-                  stderr
-                );
-
-                return reject(error);
-              }
-
-              resolve();
-            }
-          );
-        }
-      );
-
-      if (fs.existsSync(concatFile)) {
-        fs.unlinkSync(concatFile);
-      }
-    }
-
-    console.log(
-      `✅ Google TTS audio saved: ${finalName}`
-    );
-
-    return {
-      audioFileName: finalName,
-      audioFilePath: finalPath,
-      audioUrl:
-        `/audio/${finalName}`,
-    };
-  } finally {
-    // --------------------------------------------------------
-    // CLEAN TEMP GOOGLE FILES
-    // --------------------------------------------------------
-
-    for (const file of tempFiles) {
-      if (fs.existsSync(file)) {
-        try {
-          fs.unlinkSync(file);
-        } catch (error) {
-          console.warn(
-            `⚠️ Could not remove temp audio: ${file}`
-          );
-        }
-      }
-    }
-  }
-};
-
-// ============================================================
+// ======================================================
 // GENERATE VIDEO AUDIO
-// ============================================================
+// ======================================================
 
 router.post(
   "/generate-video-audio",
@@ -494,23 +382,10 @@ router.post(
         language,
       } = req.body;
 
-      console.log("");
-      console.log(
-        "======================================"
-      );
-      console.log(
-        "🎙️ VIDEO AUDIO GENERATION STARTED"
-      );
-      console.log(
-        "======================================"
-      );
-
-      // ======================================================
-      // VALIDATION
-      // ======================================================
-
       if (
-        !Array.isArray(scenes) ||
+        !Array.isArray(
+          scenes
+        ) ||
         scenes.length === 0
       ) {
         return res.status(400).json({
@@ -527,40 +402,76 @@ router.post(
         return res.status(400).json({
           success: false,
           message:
-            "voiceType must be 'ai' or 'user'.",
+            "voiceType must be ai or user.",
         });
       }
 
-      // ======================================================
-      // USER VOICE
-      // ======================================================
+      // ==================================================
+      // RESOLVE VOICE
+      // ==================================================
 
-      if (voiceType === "user") {
+      let elevenLabsVoiceId =
+        voiceId;
+
+      let selectedUserVoice =
+        null;
+
+      if (
+        voiceType === "user"
+      ) {
         if (!userVoiceId) {
           return res.status(400).json({
             success: false,
             message:
-              "User voice ID is required.",
+              "Please select your voice.",
           });
         }
 
-        console.log(
-          "👤 Selected user voice:",
-          userVoiceId
-        );
+        selectedUserVoice =
+          await getUserVoice(
+            userVoiceId
+          );
 
-        return res.status(400).json({
-          success: false,
-          message:
-            "User voice audio generation is not connected yet. AI voice is ready. We will connect the local/user voice pipeline separately.",
-        });
+        if (
+          selectedUserVoice.status !==
+          "ready"
+        ) {
+          return res.status(400).json({
+            success: false,
+
+            message:
+              "Your voice is not ready yet. Please record your voice again or wait until cloning is complete.",
+          });
+        }
+
+        if (
+          !selectedUserVoice.externalVoiceId
+        ) {
+          return res.status(400).json({
+            success: false,
+
+            message:
+              "No cloned voice ID is available for this voice.",
+          });
+        }
+
+        elevenLabsVoiceId =
+          selectedUserVoice.externalVoiceId;
+
+        console.log(
+          "👤 Using cloned user voice:",
+          elevenLabsVoiceId
+        );
       }
 
-      // ======================================================
+      // ==================================================
       // AI VOICE
-      // ======================================================
+      // ==================================================
 
-      if (!voiceId) {
+      if (
+        voiceType === "ai" &&
+        !elevenLabsVoiceId
+      ) {
         return res.status(400).json({
           success: false,
           message:
@@ -568,19 +479,23 @@ router.post(
         });
       }
 
-      console.log(
-        "🤖 Selected AI voice:",
-        voiceId
-      );
-
-      const ELEVENLABS_API_KEY =
+      const apiKey =
         process.env.ELEVENLABS_API_KEY;
 
-      const generatedScenes = [];
+      if (!apiKey) {
+        return res.status(500).json({
+          success: false,
+          message:
+            "ELEVENLABS_API_KEY is missing.",
+        });
+      }
 
-      // ======================================================
-      // GENERATE EACH SCENE
-      // ======================================================
+      // ==================================================
+      // GENERATE SCENE AUDIO
+      // ==================================================
+
+      const generatedScenes =
+        [];
 
       for (
         let index = 0;
@@ -596,7 +511,8 @@ router.post(
 
         const narration =
           String(
-            scene.narrationText || ""
+            scene.narrationText ||
+              ""
           ).trim();
 
         if (!narration) {
@@ -606,253 +522,136 @@ router.post(
         }
 
         console.log(
-          `🎙️ Generating AI voice for Scene ${sceneNumber}...`
+          `🎙️ Generating ${
+            voiceType === "user"
+              ? "USER"
+              : "AI"
+          } voice for Scene ${sceneNumber}...`
         );
 
-        let audioFileName = null;
-        let audioFilePath = null;
-        let audioUrl = null;
-        let actualVoiceType = "ai";
-        let actualProvider = "ElevenLabs";
+        const response =
+          await fetch(
+            `https://api.elevenlabs.io/v1/text-to-speech/${elevenLabsVoiceId}`,
+            {
+              method: "POST",
 
-        // ====================================================
-        // TRY ELEVENLABS
-        // ====================================================
+              headers: {
+                "xi-api-key":
+                  apiKey,
 
-        if (ELEVENLABS_API_KEY) {
-          try {
-            const elevenLabsUrl =
-              `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
+                "Content-Type":
+                  "application/json",
 
-            const elevenResponse =
-              await fetch(
-                elevenLabsUrl,
-                {
-                  method: "POST",
+                Accept:
+                  "audio/mpeg",
+              },
 
-                  headers: {
-                    "xi-api-key":
-                      ELEVENLABS_API_KEY,
+              body: JSON.stringify({
+                text:
+                  narration,
 
-                    "Content-Type":
-                      "application/json",
+                // Supports English,
+                // Telugu and Hindi.
+                model_id:
+                  "eleven_multilingual_v2",
 
-                    Accept:
-                      "audio/mpeg",
-                  },
+                voice_settings: {
+                  stability:
+                    0.5,
 
-                  body: JSON.stringify({
-                    text: narration,
+                  similarity_boost:
+                    0.75,
 
-                    model_id:
-                      "eleven_multilingual_v2",
+                  style:
+                    0,
 
-                    voice_settings: {
-                      stability: 0.5,
-
-                      similarity_boost: 0.75,
-
-                      style: 0.0,
-
-                      use_speaker_boost:
-                        true,
-                    },
-                  }),
-                }
-              );
-
-            // ==================================================
-            // ELEVENLABS FAILED
-            // ==================================================
-
-            if (!elevenResponse.ok) {
-              let errorBody = "";
-
-              try {
-                errorBody =
-                  await elevenResponse.text();
-              } catch {
-                errorBody =
-                  "Unknown ElevenLabs error";
-              }
-
-              console.warn("");
-              console.warn(
-                "⚠️ ElevenLabs failed."
-              );
-
-              console.warn(
-                "Status:",
-                elevenResponse.status
-              );
-
-              console.warn(
-                "Response:",
-                errorBody
-              );
-
-              console.warn(
-                "🆓 Falling back to Google TTS..."
-              );
-            } else {
-              // ================================================
-              // ELEVENLABS SUCCESS
-              // ================================================
-
-              const audioBuffer =
-                Buffer.from(
-                  await elevenResponse.arrayBuffer()
-                );
-
-              audioFileName =
-                `video_scene_${sceneNumber}_${Date.now()}.mp3`;
-
-              audioFilePath =
-                path.join(
-                  AUDIO_DIR,
-                  audioFileName
-                );
-
-              fs.writeFileSync(
-                audioFilePath,
-                audioBuffer
-              );
-
-              audioUrl =
-                `/audio/${audioFileName}`;
-
-              actualProvider =
-                "ElevenLabs";
-
-              console.log(
-                `✅ Scene ${sceneNumber} ElevenLabs audio saved: ${audioFileName}`
-              );
+                  use_speaker_boost:
+                    true,
+                },
+              }),
             }
-          } catch (elevenError) {
-            console.warn("");
-            console.warn(
-              `⚠️ ElevenLabs request failed for Scene ${sceneNumber}:`
-            );
-
-            console.warn(
-              elevenError.message
-            );
-
-            console.warn(
-              "🆓 Falling back to Google TTS..."
-            );
-          }
-        } else {
-          console.warn(
-            "⚠️ ELEVENLABS_API_KEY not found."
           );
 
-          console.warn(
-            "🆓 Using Google TTS directly."
+        if (!response.ok) {
+          const errorBody =
+            await response.text();
+
+          throw new Error(
+            `ElevenLabs TTS failed for Scene ${sceneNumber}: ${errorBody}`
           );
         }
-
-        // ====================================================
-        // GOOGLE TTS FALLBACK
-        // ====================================================
-
-        if (
-          !audioFilePath ||
-          !fs.existsSync(audioFilePath)
-        ) {
-          const fallback =
-            await generateGoogleFallbackVoice({
-              text: narration,
-              language,
-              sceneNumber,
-            });
-
-          audioFileName =
-            fallback.audioFileName;
-
-          audioFilePath =
-            fallback.audioFilePath;
-
-          audioUrl =
-            fallback.audioUrl;
-
-          actualProvider =
-            "Google TTS";
-
-          actualVoiceType =
-            "ai";
-
-          console.log(
-            `✅ Scene ${sceneNumber} fallback audio ready`
+   
+        const audioBuffer =
+          Buffer.from(
+            await response.arrayBuffer()
           );
-        }
 
-        // ====================================================
-        // RETURN SCENE
-        // ====================================================
+        const audioFileName =
+          `video_scene_${sceneNumber}_${Date.now()}.mp3`;
+
+        const audioFilePath =
+          path.join(
+            AUDIO_DIR,
+            audioFileName
+          );
+
+        fs.writeFileSync(
+          audioFilePath,
+          audioBuffer
+        );
+
+        const audioUrl =
+          `/audio/${audioFileName}`;
 
         generatedScenes.push({
           ...scene,
 
-          audioUrl,
+          sceneNumber,
 
-          audioFileName,
+          audioUrl,
 
           audioPath:
             audioFilePath,
 
-          voiceType:
-            actualVoiceType,
-
-          voiceId,
-
-          voiceProvider:
-            actualProvider,
+          voiceType,
 
           language:
-            language || "Telugu",
+            language ||
+            "English",
         });
+
+        console.log(
+          `✅ Scene ${sceneNumber} audio saved`
+        );
       }
 
-      // ========================================================
-      // COMPLETE
-      // ========================================================
-
-      console.log(
-        "======================================"
-      );
-
-      console.log(
-        "🎉 ALL SCENE AUDIO GENERATED"
-      );
-
-      console.log(
-        "======================================"
-      );
-
-      return res.status(200).json({
+      return res.json({
         success: true,
 
         message:
           "Audio generated successfully.",
 
-        voiceType,
-
-        voiceId,
-
         scenes:
           generatedScenes,
 
-        totalScenes:
-          generatedScenes.length,
-      });
-    } catch (error) {
-      console.error("");
-      console.error(
-        "❌ VIDEO AUDIO GENERATION FAILED"
-      );
+        voiceType,
 
+        language:
+          language ||
+          "English",
+
+        voiceId:
+          elevenLabsVoiceId,
+
+        userVoiceId:
+          voiceType === "user"
+            ? userVoiceId
+            : null,
+      });
+
+    } catch (error) {
       console.error(
+        "❌ Video audio generation failed:",
         error.message
       );
 
@@ -860,48 +659,11 @@ router.post(
         success: false,
 
         message:
+          error.message ||
           "Audio generation failed.",
-
-        error:
-          error.message,
       });
     }
   }
 );
-
-// ============================================================
-// MULTER ERROR HANDLER
-// ============================================================
-
-router.use(
-  (error, req, res, next) => {
-    if (
-      error instanceof
-      multer.MulterError
-    ) {
-      return res.status(400).json({
-        success: false,
-
-        message:
-          error.message,
-      });
-    }
-
-    if (error) {
-      return res.status(400).json({
-        success: false,
-
-        message:
-          error.message,
-      });
-    }
-
-    next();
-  }
-);
-
-// ============================================================
-// EXPORT
-// ============================================================
 
 module.exports = router;

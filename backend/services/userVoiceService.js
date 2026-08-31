@@ -1,366 +1,332 @@
 const fs = require("fs");
 const path = require("path");
 
-const UserVoice = require("../models/UserVoice");
+const UserVoice =
+  require("../models/UserVoice");
 
-// ============================================================
+const {
+  cloneVoice,
+  deleteVoice,
+} =
+  require("./elevenLabsVoiceService");
+
+// ======================================================
 // VOICE DIRECTORY
-// ============================================================
+// ======================================================
 
-const VOICE_DIR = path.join(
-  __dirname,
-  "..",
-  "public",
-  "voices"
-);
+const VOICE_DIR =
+  path.join(
+    __dirname,
+    "..",
+    "public",
+    "voices"
+  );
 
 if (!fs.existsSync(VOICE_DIR)) {
-  fs.mkdirSync(VOICE_DIR, {
-    recursive: true,
-  });
+  fs.mkdirSync(
+    VOICE_DIR,
+    {
+      recursive: true,
+    }
+  );
 }
 
-// ============================================================
-// VALIDATE VOICE FILE
-// ============================================================
+// ======================================================
+// VALIDATE FILE
+// ======================================================
 
-const validateVoiceFile = (file) => {
-  if (!file) {
-    throw new Error(
-      "Voice file is required"
-    );
-  }
-
-  const allowedMimeTypes = [
-    "audio/mpeg",
-    "audio/mp3",
-    "audio/wav",
-    "audio/x-wav",
-    "audio/mp4",
-    "audio/m4a",
-    "audio/ogg",
-    "audio/webm",
-  ];
-
-  if (
-    !allowedMimeTypes.includes(
-      file.mimetype
-    )
-  ) {
-    throw new Error(
-      "Unsupported audio format. Please upload MP3, WAV, M4A, OGG or WEBM."
-    );
-  }
-
-  const maxSize =
-    20 * 1024 * 1024;
-
-  if (file.size > maxSize) {
-    throw new Error(
-      "Voice file must be smaller than 20 MB."
-    );
-  }
-
-  return true;
-};
-
-// ============================================================
-// CREATE VOICE PROFILE
-// ============================================================
-
-const createUserVoice = async ({
-  name,
-  language,
-  file,
-}) => {
-  try {
-    console.log(
-      "🎙️ Creating voice profile..."
-    );
-
-    // Validate file
-    validateVoiceFile(file);
-
-    // Voice name
-    const voiceName =
-      name?.trim() ||
-      "My Voice";
-
-    // File paths
-    const filePath =
-      file.path;
-
-    const fileUrl =
-      `/voices/${file.filename}`;
-
-    // ========================================================
-    // SAVE VOICE PROFILE
-    // ========================================================
-
-    const userVoice =
-      await UserVoice.create({
-        name:
-          voiceName,
-
-        filePath,
-
-        fileUrl,
-
-        originalFileName:
-          file.originalname,
-
-        mimeType:
-          file.mimetype,
-
-        language:
-          language || "Telugu",
-
-        duration:
-          0,
-
-        status:
-          "uploaded",
-
-        provider:
-          "none",
-
-        externalVoiceId:
-          null,
-
-        isActive:
-          true,
-      });
-
-    console.log(
-      "✅ Voice profile created:",
-      userVoice._id.toString()
-    );
-
-    return userVoice;
-
-  } catch (error) {
-
-    console.error(
-      "❌ Voice profile creation failed:",
-      error.message
-    );
-
-    // Remove uploaded file if DB failed
-    if (
-      file?.path &&
-      fs.existsSync(file.path)
-    ) {
-      try {
-        fs.unlinkSync(
-          file.path
-        );
-      } catch (deleteError) {
-        console.error(
-          "⚠️ Could not delete voice file:",
-          deleteError.message
-        );
-      }
+const validateVoiceFile =
+  (file) => {
+    if (!file) {
+      throw new Error(
+        "Voice file is required."
+      );
     }
 
-    throw error;
-  }
-};
+    const allowedTypes = [
+      "audio/mpeg",
+      "audio/mp3",
+      "audio/wav",
+      "audio/x-wav",
+      "audio/mp4",
+      "audio/m4a",
+      "audio/ogg",
+      "audio/webm",
+    ];
 
-// ============================================================
+    if (
+      !allowedTypes.includes(
+        file.mimetype
+      )
+    ) {
+      throw new Error(
+        "Only MP3, WAV, M4A, OGG or WEBM files are allowed."
+      );
+    }
+
+    const maxSize =
+      20 * 1024 * 1024;
+
+    if (
+      file.size >
+      maxSize
+    ) {
+      throw new Error(
+        "Voice file must be smaller than 20 MB."
+      );
+    }
+
+    return true;
+  };
+
+// ======================================================
+// CREATE + CLONE USER VOICE
+// ======================================================
+
+const createUserVoice =
+  async ({
+    name,
+    language,
+    file,
+  }) => {
+    validateVoiceFile(file);
+
+    let voice;
+
+    try {
+      console.log(
+        "🎙️ Creating user voice profile..."
+      );
+
+      voice =
+        await UserVoice.create({
+          name:
+            name?.trim() ||
+            "My Voice",
+
+          filePath:
+            file.path,
+
+          fileUrl:
+            `/voices/${file.filename}`,
+
+          originalFileName:
+            file.originalname,
+
+          mimeType:
+            file.mimetype,
+
+          language:
+            language ||
+            "English",
+
+          duration:
+            0,
+
+          status:
+            "processing",
+
+          provider:
+            "elevenlabs",
+
+          externalVoiceId:
+            null,
+
+          isActive:
+            true,
+        });
+
+      console.log(
+        "✅ UserVoice created:",
+        voice._id.toString()
+      );
+
+      // ==============================================
+      // CLONE WITH ELEVENLABS
+      // ==============================================
+
+      const externalVoiceId =
+        await cloneVoice({
+          name:
+            name ||
+            "My Voice",
+
+          filePath:
+            file.path,
+        });
+
+      voice.externalVoiceId =
+        externalVoiceId;
+
+      voice.provider =
+        "elevenlabs";
+
+      voice.status =
+        "ready";
+
+      await voice.save();
+
+      console.log(
+        "✅ User voice is ready:",
+        voice._id.toString()
+      );
+
+      return voice;
+
+    } catch (error) {
+
+      console.error(
+        "❌ User voice creation failed:",
+        error.message
+      );
+
+      // If MongoDB record was created but
+      // cloning failed, mark it failed.
+      if (voice) {
+        try {
+          voice.status =
+            "failed";
+
+          await voice.save();
+        } catch {}
+      }
+
+      throw error;
+    }
+  };
+
+// ======================================================
 // GET ALL VOICES
-// ============================================================
+// ======================================================
 
-const getUserVoices = async () => {
-
-  const voices =
-    await UserVoice.find({
+const getUserVoices =
+  async () => {
+    return UserVoice.find({
       isActive: true,
     }).sort({
       createdAt: -1,
     });
+  };
 
-  return voices;
-};
+// ======================================================
+// GET ONE VOICE
+// ======================================================
 
-// ============================================================
-// GET SINGLE VOICE
-// ============================================================
+const getUserVoice =
+  async (voiceId) => {
+    if (!voiceId) {
+      throw new Error(
+        "Voice ID is required."
+      );
+    }
 
-const getUserVoice = async (
-  voiceId
-) => {
+    const voice =
+      await UserVoice.findOne({
+        _id: voiceId,
 
-  if (!voiceId) {
-    throw new Error(
-      "voiceId is required"
-    );
-  }
+        isActive: true,
+      });
 
-  const voice =
-    await UserVoice.findOne({
-      _id: voiceId,
-      isActive: true,
-    });
+    if (!voice) {
+      throw new Error(
+        "User voice not found."
+      );
+    }
 
-  if (!voice) {
-    throw new Error(
-      "Voice profile not found"
-    );
-  }
+    return voice;
+  };
 
-  return voice;
-};
+// ======================================================
+// DELETE USER VOICE
+// ======================================================
 
-// ============================================================
-// DELETE VOICE
-// ============================================================
+const deleteUserVoice =
+  async (voiceId) => {
+    const voice =
+      await UserVoice.findById(
+        voiceId
+      );
 
-const deleteUserVoice = async (
-  voiceId
-) => {
+    if (!voice) {
+      throw new Error(
+        "User voice not found."
+      );
+    }
 
-  const voice =
-    await getUserVoice(
+    // Delete ElevenLabs clone
+    if (
+      voice.externalVoiceId
+    ) {
+      try {
+        await deleteVoice(
+          voice.externalVoiceId
+        );
+      } catch (error) {
+        console.warn(
+          "⚠️ Could not delete ElevenLabs voice:",
+          error.message
+        );
+      }
+    }
+
+    // Delete local recording
+    if (
+      voice.filePath &&
+      fs.existsSync(
+        voice.filePath
+      )
+    ) {
+      try {
+        fs.unlinkSync(
+          voice.filePath
+        );
+      } catch {}
+    }
+
+    await UserVoice.findByIdAndDelete(
       voiceId
     );
 
-  // Delete physical file
-  if (
-    voice.filePath &&
-    fs.existsSync(
-      voice.filePath
-    )
-  ) {
-    fs.unlinkSync(
-      voice.filePath
-    );
-
-    console.log(
-      "🗑️ Voice file deleted"
-    );
-  }
-
-  // Delete MongoDB record
-  await UserVoice.findByIdAndDelete(
-    voice._id
-  );
-
-  console.log(
-    "✅ Voice profile deleted"
-  );
-
-  return {
-    success: true,
-
-    voiceId:
-      voice._id,
+    return true;
   };
-};
 
-// ============================================================
+// ======================================================
 // SET ACTIVE VOICE
-// ============================================================
+// ======================================================
 
-const setActiveVoice = async (
-  voiceId
-) => {
-
-  // Deactivate all
-  await UserVoice.updateMany(
-    {},
-    {
-      $set: {
+const setActiveVoice =
+  async (voiceId) => {
+    await UserVoice.updateMany(
+      {},
+      {
         isActive: false,
-      },
-    }
-  );
-
-  // Activate selected voice
-  const voice =
-    await UserVoice.findByIdAndUpdate(
-      voiceId,
-      {
-        $set: {
-          isActive: true,
-        },
-      },
-      {
-        new: true,
       }
     );
 
-  if (!voice) {
-    throw new Error(
-      "Voice profile not found"
-    );
-  }
+    const voice =
+      await UserVoice.findByIdAndUpdate(
+        voiceId,
+        {
+          isActive: true,
+        },
+        {
+          new: true,
+        }
+      );
 
-  console.log(
-    "✅ Active voice:",
-    voice.name
-  );
-
-  return voice;
-};
-
-// ============================================================
-// PREPARE VOICE FOR CLONING
-// ============================================================
-
-const prepareVoiceForCloning = async (
-  voiceId
-) => {
-
-  const voice =
-    await UserVoice.findById(
-      voiceId
-    );
-
-  if (!voice) {
-    throw new Error(
-      "Voice profile not found"
-    );
-  }
-
-  if (
-    !voice.filePath ||
-    !fs.existsSync(
-      voice.filePath
-    )
-  ) {
-    throw new Error(
-      "Original voice file not found"
-    );
-  }
-
-  await UserVoice.findByIdAndUpdate(
-    voiceId,
-    {
-      $set: {
-        status:
-          "processing",
-      },
+    if (!voice) {
+      throw new Error(
+        "User voice not found."
+      );
     }
-  );
 
-  console.log(
-    "🎙️ Voice prepared for cloning:",
-    voice.name
-  );
-
-  return voice;
-};
-
-// ============================================================
-// EXPORT
-// ============================================================
+    return voice;
+  };
 
 module.exports = {
-  validateVoiceFile,
   createUserVoice,
   getUserVoices,
   getUserVoice,
   deleteUserVoice,
   setActiveVoice,
-  prepareVoiceForCloning,
 };

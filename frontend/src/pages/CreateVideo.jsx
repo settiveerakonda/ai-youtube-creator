@@ -1,7 +1,8 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 
 const API_URL = "https://ai-youtube-creator.onrender.com";
+
 const CreateVideoWizard = () => {
   // ============================================================
   // STATE MANAGEMENT
@@ -27,19 +28,34 @@ const CreateVideoWizard = () => {
 
   const [voiceType, setVoiceType] = useState("ai");
   const [selectedAIVoice, setSelectedAIVoice] = useState("telugu-female");
-  const [selectedUserVoice, setSelectedUserVoice] = useState("");
+  const [userVoiceId, setUserVoiceId] = useState("");
   const [audioReady, setAudioReady] = useState(false);
 
+  // Audio Recording States
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [recordedAudioUrl, setRecordedAudioUrl] = useState("");
+  const [recordedAudioBlob, setRecordedAudioBlob] = useState(null);
+  const [uploadingVoice, setUploadingVoice] = useState(false);
+  const [mediaRecorder, setMediaRecorder] = useState(null);
+
+  // Visuals & Processing States
   const [visualScenes, setVisualScenes] = useState([]);
   const [pexelsResults, setPexelsResults] = useState({});
   const [pexelsLoading, setPexelsLoading] = useState({});
   const [imageSearchText, setImageSearchText] = useState({});
   const [uploadingImages, setUploadingImages] = useState({});
-  const fileInputRefs = useRef({});
 
   const [finalPrepared, setFinalPrepared] = useState(false);
   const [finalVideoUrl, setFinalVideoUrl] = useState("");
   const [previewSceneIndex, setPreviewSceneIndex] = useState(null);
+
+  // ============================================================
+  // REFS
+  // ============================================================
+  const fileInputRefs = useRef({});
+  const mediaRecorderRef = useRef(null);
+  const recordingChunksRef = useRef([]);
 
   const aiVoices = [
     {
@@ -67,6 +83,31 @@ const CreateVideoWizard = () => {
   ];
 
   // ============================================================
+  // RECORDING TIMER & CLEANUP
+  // ============================================================
+  useEffect(() => {
+    let timer;
+    if (isRecording) {
+      timer = setInterval(() => {
+        setRecordingTime((previous) => previous + 1);
+      }, 1000);
+    }
+    return () => {
+      if (timer) {
+        clearInterval(timer);
+      }
+    };
+  }, [isRecording]);
+
+  useEffect(() => {
+    return () => {
+      if (recordedAudioUrl && recordedAudioUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(recordedAudioUrl);
+      }
+    };
+  }, [recordedAudioUrl]);
+
+  // ============================================================
   // HELPERS & HANDLERS
   // ============================================================
   const getMediaUrl = (url) => {
@@ -81,6 +122,195 @@ const CreateVideoWizard = () => {
     const { name, value } = e.target;
     setFormData((prev) => ({ ...prev, [name]: value }));
   };
+
+  // ============================================================
+  // VOICE RECORDING & UPLOAD HANDLERS
+  // ============================================================
+  const startRecording = async () => {
+    try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        alert("Your browser does not support microphone recording.");
+        return;
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+      });
+
+      recordingChunksRef.current = [];
+
+      const recorder = new MediaRecorder(stream, {
+        mimeType: "audio/webm",
+      });
+
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data && event.data.size > 0) {
+          recordingChunksRef.current.push(event.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        const audioBlob = new Blob(recordingChunksRef.current, {
+          type: "audio/webm",
+        });
+
+        const audioUrl = URL.createObjectURL(audioBlob);
+
+        setRecordedAudioBlob(audioBlob);
+        setRecordedAudioUrl(audioUrl);
+
+        stream.getTracks().forEach((track) => {
+          track.stop();
+        });
+      };
+
+      recorder.start();
+      setMediaRecorder(recorder);
+      setIsRecording(true);
+      setRecordingTime(0);
+    } catch (error) {
+      console.error("Microphone error:", error);
+      alert("Microphone permission is required to record your voice.");
+    }
+  };
+
+  const stopRecording = () => {
+    if (
+      mediaRecorderRef.current &&
+      mediaRecorderRef.current.state !== "inactive"
+    ) {
+      mediaRecorderRef.current.stop();
+    }
+
+    setIsRecording(false);
+    setMediaRecorder(null);
+  };
+
+  const resetRecording = () => {
+    if (recordedAudioUrl) {
+      URL.revokeObjectURL(recordedAudioUrl);
+    }
+
+    setRecordedAudioUrl("");
+    setRecordedAudioBlob(null);
+    setRecordingTime(0);
+    setUserVoiceId("");
+  };
+  
+const uploadUserVoice = async () => {
+  if (!recordedAudioBlob) {
+    alert("Please record your voice first.");
+    return;
+  }
+
+  try {
+    setUploadingVoice(true);
+
+    const audioFile = new File(
+      [recordedAudioBlob],
+      `my_voice_${Date.now()}.webm`,
+      {
+        type: "audio/webm",
+      }
+    );
+
+    const uploadData = new FormData();
+
+    // IMPORTANT: backend expects "voice"
+    uploadData.append(
+      "voice",
+      audioFile
+    );
+
+    uploadData.append(
+      "name",
+      "My Voice"
+    );
+
+    uploadData.append(
+      "language",
+      formData.language || "English"
+    );
+
+    // IMPORTANT: backend route is /api/voices/upload
+    const response = await fetch(
+      `${API_URL}/api/voices/upload`,
+      {
+        method: "POST",
+        body: uploadData,
+      }
+    );
+
+    // Don't blindly parse HTML as JSON
+    const contentType =
+      response.headers.get("content-type") || "";
+
+    if (!contentType.includes("application/json")) {
+      const text = await response.text();
+
+      throw new Error(
+        `Server returned non-JSON response (${response.status}): ${text.substring(
+          0,
+          200
+        )}`
+      );
+    }
+
+    const data = await response.json();
+
+    console.log(
+      "🎙️ Voice upload response:",
+      data
+    );
+
+    if (!response.ok || !data.success) {
+      throw new Error(
+        data.message ||
+          "Voice upload failed."
+      );
+    }
+
+    const voiceId =
+      data.voiceId ||
+      data.voice?.id ||
+      data.voice?._id;
+
+    if (!voiceId) {
+      throw new Error(
+        "Voice uploaded but voice ID was not returned."
+      );
+    }
+
+    setUserVoiceId(
+      String(voiceId)
+    );
+
+    console.log(
+      "✅ User Voice ID:",
+      voiceId
+    );
+
+    alert(
+      "✅ Your voice was cloned successfully!"
+    );
+
+  } catch (error) {
+    console.error(
+      "❌ User voice upload error:",
+      error
+    );
+
+    alert(
+      error.message ||
+        "Failed to upload your voice."
+    );
+
+  } finally {
+    setUploadingVoice(false);
+  }
+};
 
   // ============================================================
   // MANUAL SCRIPT HELPERS
@@ -109,7 +339,6 @@ const CreateVideoWizard = () => {
 
     if (!cleanText) return [];
 
-    // First use paragraphs. If a paragraph is too large, split it by sentences.
     const paragraphs = cleanText
       .split(/\n\s*\n+/)
       .map((p) => p.trim())
@@ -137,12 +366,8 @@ const CreateVideoWizard = () => {
       if (buffer) units.push(buffer.trim());
     });
 
-    // Aim for roughly 50–70 seconds of narration per scene.
     const targetSceneCount = Math.max(1, Math.ceil(getTargetDurationSeconds() / 60));
-    const desiredSceneCount = Math.min(
-      15,
-      Math.max(1, Math.round(targetSceneCount * 0.6))
-    );
+    const desiredSceneCount = Math.min(15, Math.max(1, Math.round(targetSceneCount * 0.6)));
 
     const totalWords = units.reduce((sum, unit) => sum + estimateWords(unit), 0) || 1;
     const scenes = [];
@@ -352,8 +577,8 @@ const CreateVideoWizard = () => {
       alert("No script available.");
       return;
     }
-    if (voiceType === "user" && !selectedUserVoice.trim()) {
-      alert("Please enter/select your uploaded voice ID.");
+    if (voiceType === "user" && !userVoiceId) {
+      alert("Please record and upload your voice first.");
       return;
     }
 
@@ -374,7 +599,7 @@ const CreateVideoWizard = () => {
       }
 
       if (voiceType === "user") {
-        payload.userVoiceId = selectedUserVoice.trim();
+        payload.userVoiceId = userVoiceId;
       }
 
       const response = await axios.post(`${API_URL}/api/voices/generate-video-audio`, payload);
@@ -518,10 +743,7 @@ const CreateVideoWizard = () => {
           return scene;
         }
 
-        [images[imageIndex], images[targetIndex]] = [
-          images[targetIndex],
-          images[imageIndex],
-        ];
+        [images[imageIndex], images[targetIndex]] = [images[targetIndex], images[imageIndex]];
 
         return {
           ...scene,
@@ -532,9 +754,7 @@ const CreateVideoWizard = () => {
   };
 
   const toggleScenePreview = (sceneIndex) => {
-    setPreviewSceneIndex((current) =>
-      current === sceneIndex ? null : sceneIndex
-    );
+    setPreviewSceneIndex((current) => (current === sceneIndex ? null : sceneIndex));
   };
 
   const updateImageDuration = (sceneIndex, imageIndex, value) => {
@@ -638,6 +858,7 @@ const CreateVideoWizard = () => {
   };
 
   const resetWizard = () => {
+    resetRecording();
     setCurrentStep(1);
     setScriptSource("ai");
     setManualScript("");
@@ -648,7 +869,7 @@ const CreateVideoWizard = () => {
     setIsEditingScript(false);
     setVoiceType("ai");
     setSelectedAIVoice("telugu-female");
-    setSelectedUserVoice("");
+    setUserVoiceId("");
     setAudioReady(false);
     setVisualScenes([]);
     setPexelsResults({});
@@ -845,6 +1066,7 @@ const CreateVideoWizard = () => {
                     <select className="form-select form-select-lg" name="language" value={formData.language} onChange={handleInputChange}>
                       <option value="Telugu">Telugu</option>
                       <option value="English">English</option>
+                      <option value="Hindi">Hindi</option>
                     </select>
                   </div>
                   <div className="col-md-6">
@@ -1015,7 +1237,7 @@ const CreateVideoWizard = () => {
                 <div className="mb-4">
                   <span className="badge text-bg-primary mb-2">STEP 3</span>
                   <h2 className="fw-bold">Choose Your Voice</h2>
-                  <p className="text-secondary">Select the voice that will narrate your video.</p>
+                  <p className="text-secondary">Select or record the voice that will narrate your video.</p>
                 </div>
 
                 {/* AI Voice Selection */}
@@ -1076,9 +1298,9 @@ const CreateVideoWizard = () => {
                   </div>
                 </div>
 
-                {/* User Voice Selection */}
+                {/* User Voice Option */}
                 <div
-                  className={`card mb-4 ${voiceType === "user" ? "border-primary shadow-sm" : ""}`}
+                  className={`card mb-3 ${voiceType === "user" ? "border-primary shadow-sm" : ""}`}
                   style={{ cursor: "pointer" }}
                   onClick={() => setVoiceType("user")}
                 >
@@ -1091,26 +1313,87 @@ const CreateVideoWizard = () => {
                         onChange={() => setVoiceType("user")}
                       />
                       <div className="flex-grow-1">
-                        <h5 className="fw-bold">👤 My Voice</h5>
-                        <p className="text-secondary">Use your previously uploaded voice.</p>
-                        {voiceType === "user" && (
-                          <div>
-                            <label className="form-label fw-semibold">Uploaded Voice ID</label>
-                            <input
-                              type="text"
-                              className="form-control"
-                              value={selectedUserVoice}
-                              onChange={(e) => setSelectedUserVoice(e.target.value)}
-                              placeholder="Example: your voice ID"
-                              onClick={(e) => e.stopPropagation()}
-                            />
-                            <div className="form-text">Use the voice ID returned by your existing voice upload system.</div>
-                          </div>
-                        )}
+                        <h5 className="fw-bold mb-1">🎙️ My Voice (Record & Upload)</h5>
+                        <p className="text-secondary mb-0">Record your own voice sample for custom audio narration.</p>
                       </div>
                     </div>
                   </div>
                 </div>
+
+                {/* MY VOICE - RECORDING PANEL */}
+                {voiceType === "user" && (
+                  <div className="card border-primary-subtle mb-4">
+                    <div className="card-body p-4">
+                      <h5 className="mb-2 fw-bold">🎙️ Voice Recorder</h5>
+                      <p className="text-muted mb-3">Record your voice to use directly for narration.</p>
+
+                      {/* Recording Status */}
+                      {isRecording && (
+                        <div className="alert alert-danger d-flex align-items-center gap-2 mb-3">
+                          <span
+                            style={{
+                              width: "12px",
+                              height: "12px",
+                              borderRadius: "50%",
+                              background: "red",
+                              display: "inline-block",
+                            }}
+                          />
+                          <strong>Recording in progress...</strong>
+                          <span className="ms-auto fw-bold">{recordingTime}s</span>
+                        </div>
+                      )}
+
+                      {/* Start Recording */}
+                      {!isRecording && !recordedAudioUrl && (
+                        <button type="button" className="btn btn-danger btn-lg w-100" onClick={startRecording}>
+                          🎙️ Start Recording
+                        </button>
+                      )}
+
+                      {/* Stop Recording */}
+                      {isRecording && (
+                        <button type="button" className="btn btn-dark btn-lg w-100" onClick={stopRecording}>
+                          ⏹️ Stop Recording
+                        </button>
+                      )}
+
+                      {/* Recorded Audio Preview */}
+                      {recordedAudioUrl && !isRecording && (
+                        <div className="mt-3">
+                          <label className="form-label fw-bold">Your Recording Preview</label>
+                          <audio controls src={recordedAudioUrl} className="w-100 mb-3" />
+
+                          <div className="d-flex gap-2">
+                            <button
+                              type="button"
+                              className="btn btn-outline-secondary flex-grow-1"
+                              onClick={resetRecording}
+                            >
+                              🔄 Record Again
+                            </button>
+
+                            <button
+                              type="button"
+                              className="btn btn-success flex-grow-1"
+                              onClick={uploadUserVoice}
+                              disabled={uploadingVoice}
+                            >
+                              {uploadingVoice ? "Uploading..." : "✅ Use This Voice"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Upload Success */}
+                      {userVoiceId && (
+                        <div className="alert alert-success mt-3 mb-0">
+                          ✅ Your voice recording has been uploaded and linked.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* Voice Summary */}
                 <div className="card bg-light border-0 mb-4">
@@ -1127,7 +1410,7 @@ const CreateVideoWizard = () => {
                             ? selectedAIVoice === "telugu-male"
                               ? "Telugu Male"
                               : "Telugu Female"
-                            : selectedUserVoice || "Not selected"}
+                            : userVoiceId ? "Custom Voice Ready" : "Recording Pending"}
                         </div>
                       </div>
                       <div className="col-md-4">
@@ -1250,13 +1533,7 @@ const CreateVideoWizard = () => {
                                             type="button"
                                             className="btn btn-sm btn-outline-primary flex-grow-1"
                                             disabled={imageIndex === 0}
-                                            onClick={() =>
-                                              moveImage(
-                                                sceneIndex,
-                                                imageIndex,
-                                                "left"
-                                              )
-                                            }
+                                            onClick={() => moveImage(sceneIndex, imageIndex, "left")}
                                           >
                                             ← Move Left
                                           </button>
@@ -1264,16 +1541,8 @@ const CreateVideoWizard = () => {
                                           <button
                                             type="button"
                                             className="btn btn-sm btn-outline-primary flex-grow-1"
-                                            disabled={
-                                              imageIndex === images.length - 1
-                                            }
-                                            onClick={() =>
-                                              moveImage(
-                                                sceneIndex,
-                                                imageIndex,
-                                                "right"
-                                              )
-                                            }
+                                            disabled={imageIndex === images.length - 1}
+                                            onClick={() => moveImage(sceneIndex, imageIndex, "right")}
                                           >
                                             Move Right →
                                           </button>
@@ -1508,38 +1777,26 @@ const CreateVideoWizard = () => {
 
                 {finalPrepared && !finalVideoUrl && (
                   <div className="alert alert-success">
-                    <div className="fw-bold">
-                      🎉 Final video generation completed.
-                    </div>
-                    <div className="small mt-1">
-                      The backend finished processing, but no video URL was returned.
-                    </div>
+                    <div className="fw-bold">🎉 Final video generation completed.</div>
+                    <div className="small mt-1">The backend finished processing, but no video URL was returned.</div>
                   </div>
                 )}
 
                 {finalVideoUrl && (
                   <div className="card border-0 shadow-lg overflow-hidden mb-4">
-                    {/* HEADER */}
                     <div className="card-header bg-dark text-white p-3 p-md-4">
                       <div className="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2">
                         <div>
-                          <div className="badge text-bg-success mb-2">
-                            ✓ VIDEO READY
-                          </div>
-                          <h4 className="fw-bold mb-1">
-                            🎬 Final Video Preview
-                          </h4>
+                          <div className="badge text-bg-success mb-2">✓ VIDEO READY</div>
+                          <h4 className="fw-bold mb-1">🎬 Final Video Preview</h4>
                           <div className="small text-white-50">
                             Your script, voice and visuals have been compiled into an MP4.
                           </div>
                         </div>
-                        <div className="badge text-bg-light text-dark px-3 py-2">
-                          MP4
-                        </div>
+                        <div className="badge text-bg-light text-dark px-3 py-2">MP4</div>
                       </div>
                     </div>
 
-                    {/* VIDEO PLAYER */}
                     <div className="bg-black">
                       <video
                         controls
@@ -1556,67 +1813,38 @@ const CreateVideoWizard = () => {
                       />
                     </div>
 
-                    {/* VIDEO INFORMATION */}
                     <div className="card-body">
                       <div className="row g-3 mb-4">
                         <div className="col-md-4">
                           <div className="bg-light rounded-3 p-3 h-100">
-                            <div className="small text-secondary">
-                              SCENES
-                            </div>
-                            <div className="fs-5 fw-bold">
-                              {visualScenes.length}
-                            </div>
+                            <div className="small text-secondary">SCENES</div>
+                            <div className="fs-5 fw-bold">{visualScenes.length}</div>
                           </div>
                         </div>
 
                         <div className="col-md-4">
                           <div className="bg-light rounded-3 p-3 h-100">
-                            <div className="small text-secondary">
-                              VOICE
-                            </div>
-                            <div className="fs-5 fw-bold">
-                              {voiceType === "ai"
-                                ? "AI Voice"
-                                : "My Voice"}
-                            </div>
+                            <div className="small text-secondary">VOICE</div>
+                            <div className="fs-5 fw-bold">{voiceType === "ai" ? "AI Voice" : "My Voice"}</div>
                           </div>
                         </div>
 
                         <div className="col-md-4">
                           <div className="bg-light rounded-3 p-3 h-100">
-                            <div className="small text-secondary">
-                              VISUALS
-                            </div>
+                            <div className="small text-secondary">VISUALS</div>
                             <div className="fs-5 fw-bold">
-                              {visualScenes.reduce(
-                                (total, scene) =>
-                                  total +
-                                  (scene.images || []).length,
-                                0
-                              )}{" "}
-                              Images
+                              {visualScenes.reduce((total, scene) => total + (scene.images || []).length, 0)} Images
                             </div>
                           </div>
                         </div>
                       </div>
 
-                      {/* ACTION BUTTONS */}
                       <div className="d-flex flex-column flex-md-row gap-2">
-                        <a
-                          href={getMediaUrl(finalVideoUrl)}
-                          download
-                          className="btn btn-success btn-lg flex-grow-1"
-                        >
+                        <a href={getMediaUrl(finalVideoUrl)} download className="btn btn-success btn-lg flex-grow-1">
                           ⬇️ Download MP4
                         </a>
 
-                        <a
-                          href={getMediaUrl(finalVideoUrl)}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="btn btn-outline-primary btn-lg"
-                        >
+                        <a href={getMediaUrl(finalVideoUrl)} target="_blank" rel="noreferrer" className="btn btn-outline-primary btn-lg">
                           ↗ Open Video
                         </a>
                       </div>
@@ -1626,12 +1854,7 @@ const CreateVideoWizard = () => {
 
                 {/* FINAL ACTIONS */}
                 <div className="d-flex flex-column flex-md-row gap-2">
-                  <button
-                    type="button"
-                    className="btn btn-outline-secondary"
-                    onClick={() => setCurrentStep(4)}
-                    disabled={loading}
-                  >
+                  <button type="button" className="btn btn-outline-secondary" onClick={() => setCurrentStep(4)} disabled={loading}>
                     ← Edit Visuals
                   </button>
 
@@ -1646,25 +1869,15 @@ const CreateVideoWizard = () => {
                     </button>
                   )}
 
-                  <button
-                    type="button"
-                    className="btn btn-outline-dark"
-                    onClick={resetWizard}
-                    disabled={loading}
-                  >
+                  <button type="button" className="btn btn-outline-dark" onClick={resetWizard} disabled={loading}>
                     Create Another
                   </button>
                 </div>
 
                 {finalVideoUrl && (
                   <div className="alert alert-success border-0 mt-4 mb-0">
-                    <div className="fw-bold">
-                      🎉 Your YouTube video is ready!
-                    </div>
-                    <div className="small">
-                      Preview it above, download the MP4,
-                      or open it in a new tab.
-                    </div>
+                    <div className="fw-bold">🎉 Your YouTube video is ready!</div>
+                    <div className="small">Preview it above, download the MP4, or open it in a new tab.</div>
                   </div>
                 )}
 
@@ -1680,9 +1893,7 @@ const CreateVideoWizard = () => {
 
         {/* FOOTER */}
         <div className="text-center mt-4">
-          <small className="text-secondary">
-            AI Video Creator • Script → Voice → Visuals → Final Video
-          </small>
+          <small className="text-secondary">AI Video Creator • Script → Voice → Visuals → Final Video</small>
         </div>
       </div>
     </div>

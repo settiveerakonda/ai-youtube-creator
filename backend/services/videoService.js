@@ -32,17 +32,29 @@ const TEMP_DIR = path.join(
   "temp"
 );
 
-fs.mkdirSync(SCENE_VIDEO_DIR, {
-  recursive: true,
-});
+fs.mkdirSync(SCENE_VIDEO_DIR, { recursive: true });
+fs.mkdirSync(FINAL_VIDEO_DIR, { recursive: true });
+fs.mkdirSync(TEMP_DIR, { recursive: true });
 
-fs.mkdirSync(FINAL_VIDEO_DIR, {
-  recursive: true,
-});
+// ======================================================
+// SETTINGS
+// ======================================================
 
-fs.mkdirSync(TEMP_DIR, {
-  recursive: true,
-});
+// Captions are OFF by default.
+//
+// Why?
+// Your previous FFmpeg error was caused by the drawtext
+// filter chain. The actual video/audio pipeline works.
+//
+// Later, if you have proper Unicode fonts installed,
+// you can enable captions with:
+//
+// ENABLE_CAPTIONS=true
+//
+// Default = false
+const ENABLE_CAPTIONS =
+  String(process.env.ENABLE_CAPTIONS || "false").toLowerCase() ===
+  "true";
 
 // ======================================================
 // CREATE CAPTION CHUNKS
@@ -52,9 +64,7 @@ const createCaptionChunks = (
   narrationText,
   wordsPerCaption = 7
 ) => {
-  const words = String(
-    narrationText || ""
-  )
+  const words = String(narrationText || "")
     .trim()
     .split(/\s+/)
     .filter(Boolean);
@@ -68,10 +78,7 @@ const createCaptionChunks = (
   ) {
     chunks.push(
       words
-        .slice(
-          i,
-          i + wordsPerCaption
-        )
+        .slice(i, i + wordsPerCaption)
         .join(" ")
     );
   }
@@ -80,44 +87,58 @@ const createCaptionChunks = (
 };
 
 // ======================================================
-// ESCAPE FFMPEG TEXT
+// SRT TIME FORMAT
 // ======================================================
 
-const escapeFFmpegText = (text) => {
-  return String(text || "")
-    .replace(/\\/g, "\\\\")
-    .replace(/'/g, "\\'")
-    .replace(/:/g, "\\:")
-    .replace(/,/g, "\\,")
-    .replace(/;/g, "\\;")
-    .replace(/\[/g, "\\[")
-    .replace(/\]/g, "\\]");
+const formatSrtTime = (seconds) => {
+  const safeSeconds = Math.max(
+    0,
+    Number(seconds) || 0
+  );
+
+  const hours = Math.floor(
+    safeSeconds / 3600
+  );
+
+  const minutes = Math.floor(
+    (safeSeconds % 3600) / 60
+  );
+
+  const secs = Math.floor(
+    safeSeconds % 60
+  );
+
+  const milliseconds = Math.floor(
+    (safeSeconds - Math.floor(safeSeconds)) *
+      1000
+  );
+
+  return (
+    String(hours).padStart(2, "0") +
+    ":" +
+    String(minutes).padStart(2, "0") +
+    ":" +
+    String(secs).padStart(2, "0") +
+    "," +
+    String(milliseconds).padStart(3, "0")
+  );
 };
 
 // ======================================================
-// CREATE CAPTION FILTERS
+// CREATE SRT CAPTIONS
 // ======================================================
 
-const createCaptionFilters = async ({
+const createSrtFile = async ({
   narrationText,
-  audioPath,
+  audioDuration,
 }) => {
-  const audioDuration =
-    await getAudioDuration(
-      audioPath
-    );
-
-  const chunks =
-    createCaptionChunks(
-      narrationText,
-      7
-    );
+  const chunks = createCaptionChunks(
+    narrationText,
+    7
+  );
 
   if (!chunks.length) {
-    return {
-      audioDuration,
-      filters: [],
-    };
+    return null;
   }
 
   const totalCharacters =
@@ -129,7 +150,7 @@ const createCaptionFilters = async ({
 
   let currentTime = 0;
 
-  const filters = [];
+  const entries = [];
 
   for (
     let i = 0;
@@ -140,8 +161,7 @@ const createCaptionFilters = async ({
 
     const ratio =
       totalCharacters > 0
-        ? chunk.length /
-          totalCharacters
+        ? chunk.length / totalCharacters
         : 1 / chunks.length;
 
     let duration =
@@ -149,7 +169,7 @@ const createCaptionFilters = async ({
 
     duration = Math.max(
       duration,
-      1.2
+      1
     );
 
     const startTime =
@@ -166,10 +186,13 @@ const createCaptionFilters = async ({
         audioDuration;
     }
 
-    // ----------------------------------------------
-    // Two-line caption
-    // ----------------------------------------------
+    if (
+      endTime <= startTime
+    ) {
+      break;
+    }
 
+    // Split into two lines.
     const words =
       chunk.split(/\s+/);
 
@@ -188,47 +211,22 @@ const createCaptionFilters = async ({
         .slice(middle)
         .join(" ");
 
-    const text = line2
-      ? `${line1}\\n${line2}`
-      : line1;
+    const caption =
+      line2
+        ? `${line1}\n${line2}`
+        : line1;
 
-    const safeText =
-      escapeFFmpegText(text);
-
-    // ----------------------------------------------
-    // Caption filter
-    // ----------------------------------------------
-
-    const filter =
-      `drawtext=` +
-      `fontfile='C\\:/Windows/Fonts/Nirmala.ttf':` +
-      `text='${safeText}':` +
-      `fontcolor=white:` +
-      `fontsize=30:` +
-      `line_spacing=8:` +
-      `x=(w-text_w)/2:` +
-      `y=h-text_h-55:` +
-      `borderw=2:` +
-      `bordercolor=black:` +
-      `box=1:` +
-      `boxcolor=black@0.70:` +
-      `boxborderw=18:` +
-      `text_align=center:` +
-      `enable='between(t\\,${startTime.toFixed(
-        3
-      )}\\,${endTime.toFixed(
-        3
-      )})'`;
-
-    filters.push(filter);
-
-    console.log(
-      `📝 Caption ${i + 1}: ` +
-        `${startTime.toFixed(2)}s → ` +
-        `${endTime.toFixed(2)}s`
+    entries.push(
+      [
+        String(i + 1),
+        `${formatSrtTime(startTime)} --> ${formatSrtTime(endTime)}`,
+        caption,
+        "",
+      ].join("\n")
     );
 
-    currentTime = endTime;
+    currentTime =
+      endTime;
 
     if (
       currentTime >=
@@ -238,10 +236,140 @@ const createCaptionFilters = async ({
     }
   }
 
-  return {
-    audioDuration,
-    filters,
-  };
+  const srtContent =
+    entries.join("\n");
+
+  const srtPath =
+    path.join(
+      TEMP_DIR,
+      `captions_${Date.now()}.srt`
+    );
+
+  // UTF-8 is important for:
+  // Telugu
+  // Hindi
+  // English
+  fs.writeFileSync(
+    srtPath,
+    "\uFEFF" + srtContent,
+    "utf8"
+  );
+
+  console.log(
+    `📝 SRT captions created: ${srtPath}`
+  );
+
+  return srtPath;
+};
+
+// ======================================================
+// CREATE CAPTION FILTER
+// ======================================================
+
+const createCaptionFilter = (
+  srtPath
+) => {
+  if (!srtPath) {
+    return null;
+  }
+
+  // Convert Windows path to FFmpeg-friendly path.
+  let escapedPath =
+    srtPath
+      .replace(/\\/g, "/")
+      .replace(/:/g, "\\:");
+
+  /*
+   * subtitles filter is much safer than creating a huge
+   * drawtext chain.
+   *
+   * It also avoids commas, quotes and newlines inside
+   * drawtext expressions.
+   */
+
+  return (
+    `subtitles='${escapedPath}'` +
+    `:force_style='` +
+    `FontSize=18,` +
+    `Alignment=2,` +
+    `MarginV=35,` +
+    `PrimaryColour=&H00FFFFFF,` +
+    `OutlineColour=&H00000000,` +
+    `Outline=2,` +
+    `BorderStyle=1` +
+    `'`
+  );
+};
+
+// ======================================================
+// CREATE CAPTION FILTERS
+// ======================================================
+
+const createCaptionFilters = async ({
+  narrationText,
+  audioPath,
+}) => {
+  const audioDuration =
+    await getAudioDuration(
+      audioPath
+    );
+
+  if (!ENABLE_CAPTIONS) {
+    console.log(
+      "📝 Captions disabled - skipping subtitle filter."
+    );
+
+    return {
+      audioDuration,
+      filters: [],
+      srtPath: null,
+    };
+  }
+
+  try {
+    const srtPath =
+      await createSrtFile({
+        narrationText,
+        audioDuration,
+      });
+
+    if (!srtPath) {
+      return {
+        audioDuration,
+        filters: [],
+        srtPath: null,
+      };
+    }
+
+    const captionFilter =
+      createCaptionFilter(
+        srtPath
+      );
+
+    return {
+      audioDuration,
+      filters: captionFilter
+        ? [captionFilter]
+        : [],
+      srtPath,
+    };
+  } catch (error) {
+    console.warn(
+      "⚠️ Caption generation failed."
+    );
+
+    console.warn(
+      error.message
+    );
+
+    // IMPORTANT:
+    // Caption failure must NOT stop video creation.
+    return {
+      audioDuration,
+      filters: [],
+      srtPath: null,
+    };
+  }
 };
 
 // ======================================================
@@ -255,10 +383,7 @@ const resolveImagePath = (
     return null;
   }
 
-  // ----------------------------------------------
-  // Already a filesystem path
-  // ----------------------------------------------
-
+  // Filesystem path
   if (
     image.imagePath &&
     fs.existsSync(
@@ -277,10 +402,6 @@ const resolveImagePath = (
     return image.path;
   }
 
-  // ----------------------------------------------
-  // URL
-  // ----------------------------------------------
-
   const url =
     image.url ||
     image.imageUrl;
@@ -289,12 +410,7 @@ const resolveImagePath = (
     return null;
   }
 
-  // ----------------------------------------------
-  // Local backend URL
-  // Example:
-  // http://localhost:5000/output/images/file.jpg
-  // ----------------------------------------------
-
+  // URL
   try {
     const parsed =
       new URL(url);
@@ -304,7 +420,6 @@ const resolveImagePath = (
         parsed.pathname
       );
 
-    // /output/images/file.jpg
     if (
       pathname.startsWith(
         "/output/"
@@ -316,11 +431,8 @@ const resolveImagePath = (
         );
     }
 
-    // /images/file.jpg
     if (
-      pathname.startsWith(
-        "/"
-      )
+      pathname.startsWith("/")
     ) {
       pathname =
         pathname.substring(1);
@@ -335,7 +447,9 @@ const resolveImagePath = (
       );
 
     if (
-      fs.existsSync(localPath)
+      fs.existsSync(
+        localPath
+      )
     ) {
       return localPath;
     }
@@ -343,10 +457,7 @@ const resolveImagePath = (
     // Not a valid URL.
   }
 
-  // ----------------------------------------------
-  // Relative local path
-  // ----------------------------------------------
-
+  // Relative path
   const cleanPath =
     String(url)
       .replace(
@@ -403,11 +514,7 @@ const resolveImagePath = (
 const normalizeSceneImages = (
   scene
 ) => {
-  // ----------------------------------------------
-  // NEW FORMAT
-  // scene.images[]
-  // ----------------------------------------------
-
+  // New format
   if (
     Array.isArray(
       scene.images
@@ -438,23 +545,26 @@ const normalizeSceneImages = (
           image.imageUrl ||
           image.imagePath ||
           image.path
+      )
+      .sort(
+        (a, b) =>
+          (Number(a.order) || 0) -
+          (Number(b.order) || 0)
       );
   }
 
-  // ----------------------------------------------
-  // OLD FORMAT
-  // scene.imagePath / scene.imageUrl
-  // ----------------------------------------------
-
+  // Legacy format
   if (
     scene.imagePath ||
     scene.imageUrl
   ) {
     return [
       {
-        id: `legacy-${scene.sceneNumber}`,
+        id:
+          `legacy-${scene.sceneNumber}`,
 
-        source: "legacy",
+        source:
+          "legacy",
 
         imagePath:
           scene.imagePath,
@@ -497,9 +607,7 @@ const createImageSegment = async ({
   console.log(
     `🖼️ Scene ${sceneNumber} Image ${
       index + 1
-    }: ${safeDuration.toFixed(
-      2
-    )} sec`
+    }: ${safeDuration.toFixed(2)} sec`
   );
 
   await runFFmpeg([
@@ -512,9 +620,7 @@ const createImageSegment = async ({
     imagePath,
 
     "-t",
-    safeDuration.toFixed(
-      3
-    ),
+    safeDuration.toFixed(3),
 
     "-vf",
     [
@@ -565,8 +671,7 @@ const joinImageSegments =
     }
 
     if (
-      segmentPaths.length ===
-      1
+      segmentPaths.length === 1
     ) {
       fs.copyFileSync(
         segmentPaths[0],
@@ -629,13 +734,19 @@ const joinImageSegments =
         outputPath,
       ]);
     } finally {
-      if (
-        fs.existsSync(
-          concatFile
-        )
-      ) {
-        fs.unlinkSync(
-          concatFile
+      try {
+        if (
+          fs.existsSync(
+            concatFile
+          )
+        ) {
+          fs.unlinkSync(
+            concatFile
+          );
+        }
+      } catch (error) {
+        console.warn(
+          "⚠️ Could not delete image concat file."
         );
       }
     }
@@ -658,7 +769,7 @@ const createSceneVideo =
     );
 
     // ----------------------------------------------
-    // Audio
+    // AUDIO
     // ----------------------------------------------
 
     checkFileExists(
@@ -666,7 +777,7 @@ const createSceneVideo =
     );
 
     // ----------------------------------------------
-    // Get audio duration
+    // AUDIO DURATION
     // ----------------------------------------------
 
     console.log(
@@ -685,7 +796,7 @@ const createSceneVideo =
     );
 
     // ----------------------------------------------
-    // Images
+    // IMAGES
     // ----------------------------------------------
 
     let sceneImages =
@@ -693,10 +804,7 @@ const createSceneVideo =
         scene
       );
 
-    // ----------------------------------------------
     // Legacy fallback
-    // ----------------------------------------------
-
     if (
       !sceneImages.length &&
       imagePath
@@ -704,7 +812,6 @@ const createSceneVideo =
       sceneImages = [
         {
           imagePath,
-
           duration:
             audioDuration,
         },
@@ -724,7 +831,7 @@ const createSceneVideo =
     );
 
     // ----------------------------------------------
-    // Resolve image paths
+    // RESOLVE IMAGE PATHS
     // ----------------------------------------------
 
     const resolvedImages =
@@ -772,7 +879,7 @@ const createSceneVideo =
     }
 
     // ----------------------------------------------
-    // Adjust image durations to audio duration
+    // ADJUST IMAGE DURATIONS
     // ----------------------------------------------
 
     const requestedDuration =
@@ -798,16 +905,6 @@ const createSceneVideo =
       )} sec`
     );
 
-    // ----------------------------------------------
-    // IMPORTANT
-    //
-    // If images are shorter than audio:
-    // extend the last image.
-    //
-    // If images are longer than audio:
-    // trim the last image.
-    // ----------------------------------------------
-
     let imageDurationTotal =
       0;
 
@@ -823,7 +920,6 @@ const createSceneVideo =
           ) {
             return {
               ...image,
-
               duration: 0,
             };
           }
@@ -839,25 +935,19 @@ const createSceneVideo =
 
           return {
             ...image,
-
             duration:
               finalDuration,
           };
         }
       );
 
-    // ----------------------------------------------
-    // If requested duration is less than audio,
-    // extend LAST image.
-    // ----------------------------------------------
-
+    // Extend last image
     const remainingAudio =
       audioDuration -
       imageDurationTotal;
 
     if (
-      remainingAudio >
-      0 &&
+      remainingAudio > 0 &&
       adjustedImages.length
     ) {
       const lastIndex =
@@ -876,7 +966,7 @@ const createSceneVideo =
       );
     }
 
-    // Remove zero-duration images.
+    // Remove zero duration images
     const finalImages =
       adjustedImages.filter(
         (image) =>
@@ -893,7 +983,7 @@ const createSceneVideo =
     }
 
     // ----------------------------------------------
-    // Create temporary image videos
+    // CREATE IMAGE SEGMENTS
     // ----------------------------------------------
 
     const segmentPaths =
@@ -924,7 +1014,8 @@ const createSceneVideo =
         outputPath:
           segmentPath,
 
-        index: i,
+        index:
+          i,
 
         sceneNumber:
           scene.sceneNumber,
@@ -936,7 +1027,7 @@ const createSceneVideo =
     }
 
     // ----------------------------------------------
-    // Join all image segments
+    // JOIN IMAGE SEGMENTS
     // ----------------------------------------------
 
     const imageVideoPath =
@@ -953,15 +1044,20 @@ const createSceneVideo =
     });
 
     // ----------------------------------------------
-    // Create captions
+    // CAPTIONS
     // ----------------------------------------------
 
     console.log(
-      `📝 Creating synchronized Telugu captions for Scene ${scene.sceneNumber}...`
+      `📝 Caption mode: ${
+        ENABLE_CAPTIONS
+          ? "ENABLED"
+          : "DISABLED"
+      }`
     );
 
     const {
       filters,
+      srtPath,
     } =
       await createCaptionFilters({
         narrationText:
@@ -971,7 +1067,7 @@ const createSceneVideo =
       });
 
     // ----------------------------------------------
-    // Final scene video
+    // VIDEO FILTER
     // ----------------------------------------------
 
     const videoFilters =
@@ -988,6 +1084,10 @@ const createSceneVideo =
     const videoFilter =
       videoFilters.join(",");
 
+    // ----------------------------------------------
+    // FINAL SCENE VIDEO
+    // ----------------------------------------------
+
     const sceneVideoPath =
       path.join(
         SCENE_VIDEO_DIR,
@@ -995,54 +1095,131 @@ const createSceneVideo =
       );
 
     console.log(
-      `🎬 Combining images + audio + captions for Scene ${scene.sceneNumber}...`
+      `🎬 Combining images + audio${
+        filters.length
+          ? " + captions"
+          : ""
+      } for Scene ${scene.sceneNumber}...`
     );
 
-    await runFFmpeg([
-      "-y",
+    try {
+      await runFFmpeg([
+        "-y",
 
-      "-i",
-      imageVideoPath,
+        "-i",
+        imageVideoPath,
 
-      "-i",
-      audioPath,
+        "-i",
+        audioPath,
 
-      "-map",
-      "0:v:0",
+        "-map",
+        "0:v:0",
 
-      "-map",
-      "1:a:0",
+        "-map",
+        "1:a:0",
 
-      "-vf",
-      videoFilter,
+        "-vf",
+        videoFilter,
 
-      "-c:v",
-      "libx264",
+        "-c:v",
+        "libx264",
 
-      "-preset",
-      "veryfast",
+        "-preset",
+        "veryfast",
 
-      "-c:a",
-      "aac",
+        "-c:a",
+        "aac",
 
-      "-b:a",
-      "128k",
+        "-b:a",
+        "128k",
 
-      "-pix_fmt",
-      "yuv420p",
+        "-pix_fmt",
+        "yuv420p",
 
-      "-t",
-      audioDuration.toFixed(
-        3
-      ),
+        "-t",
+        audioDuration.toFixed(
+          3
+        ),
 
-      "-shortest",
+        "-shortest",
 
-      sceneVideoPath,
-    ]);
+        sceneVideoPath,
+      ]);
+    } catch (error) {
+      /*
+       * If captions are enabled and subtitle rendering
+       * fails, retry WITHOUT captions.
+       *
+       * This prevents the complete video pipeline from
+       * failing because of a font/subtitle problem.
+       */
+
+      if (
+        filters.length > 0
+      ) {
+        console.warn(
+          "⚠️ Caption rendering failed."
+        );
+
+        console.warn(
+          "🔄 Retrying scene WITHOUT captions..."
+        );
+
+        const fallbackFilter = [
+          "scale=1280:720:force_original_aspect_ratio=decrease",
+          "pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+          "format=yuv420p",
+        ].join(",");
+
+        await runFFmpeg([
+          "-y",
+
+          "-i",
+          imageVideoPath,
+
+          "-i",
+          audioPath,
+
+          "-map",
+          "0:v:0",
+
+          "-map",
+          "1:a:0",
+
+          "-vf",
+          fallbackFilter,
+
+          "-c:v",
+          "libx264",
+
+          "-preset",
+          "veryfast",
+
+          "-c:a",
+          "aac",
+
+          "-b:a",
+          "128k",
+
+          "-pix_fmt",
+          "yuv420p",
+
+          "-t",
+          audioDuration.toFixed(
+            3
+          ),
+
+          "-shortest",
+
+          sceneVideoPath,
+        ]);
+      } else {
+        throw error;
+      }
+    }
 
     // ----------------------------------------------
-    // Cleanup temporary files
+    // CLEANUP
     // ----------------------------------------------
 
     for (
@@ -1060,7 +1237,7 @@ const createSceneVideo =
         }
       } catch (error) {
         console.warn(
-          `⚠️ Could not delete temporary segment: ${segmentPath}`
+          `⚠️ Could not delete segment: ${segmentPath}`
         );
       }
     }
@@ -1079,6 +1256,27 @@ const createSceneVideo =
       console.warn(
         "⚠️ Could not delete temporary image video."
       );
+    }
+
+    // Remove SRT
+    if (
+      srtPath
+    ) {
+      try {
+        if (
+          fs.existsSync(
+            srtPath
+          )
+        ) {
+          fs.unlinkSync(
+            srtPath
+          );
+        }
+      } catch (error) {
+        console.warn(
+          "⚠️ Could not delete SRT file."
+        );
+      }
     }
 
     console.log(
@@ -1169,13 +1367,19 @@ const joinSceneVideos =
         finalVideoPath,
       ]);
     } finally {
-      if (
-        fs.existsSync(
-          concatFile
-        )
-      ) {
-        fs.unlinkSync(
-          concatFile
+      try {
+        if (
+          fs.existsSync(
+            concatFile
+          )
+        ) {
+          fs.unlinkSync(
+            concatFile
+          );
+        }
+      } catch (error) {
+        console.warn(
+          "⚠️ Could not delete final concat file."
         );
       }
     }
@@ -1199,6 +1403,7 @@ const createCompleteVideo =
   async ({
     scenes,
     outputName,
+    language,
   }) => {
     if (
       !scenes ||
@@ -1231,6 +1436,20 @@ const createCompleteVideo =
       `🎞️ Total scenes: ${scenes.length}`
     );
 
+    if (language) {
+      console.log(
+        `🌐 Video language: ${language}`
+      );
+    }
+
+    console.log(
+      `📝 Captions: ${
+        ENABLE_CAPTIONS
+          ? "Enabled"
+          : "Disabled"
+      }`
+    );
+
     console.log(
       "======================================"
     );
@@ -1244,10 +1463,6 @@ const createCompleteVideo =
       const result =
         await createSceneVideo({
           scene,
-
-          // ----------------------------------------
-          // Legacy support
-          // ----------------------------------------
 
           imagePath:
             scene.imagePath,
