@@ -100,27 +100,12 @@ const generateGoogleVoice = async ({
 // ======================================================
 // SAVE USER VOICE
 // ======================================================
-//
-// Later the frontend will upload:
-//
-// user voice sample
-//       ↓
-// this function
-//       ↓
-// public/voices/user-id/
-//
 
 const saveUserVoice = ({
-  userId,
+  userId = "default_user",
   sourceFile,
 }) => {
   try {
-    if (!userId) {
-      throw new Error(
-        "User ID is required"
-      );
-    }
-
     if (!sourceFile) {
       throw new Error(
         "Voice file is required"
@@ -130,7 +115,7 @@ const saveUserVoice = ({
     const userVoiceDir =
       path.join(
         USER_VOICE_DIR,
-        String(userId)
+        String(userId || "default_user")
       );
 
     fs.mkdirSync(
@@ -175,8 +160,7 @@ const saveUserVoice = ({
 // GET USER VOICE
 // ======================================================
 
-const getUserVoice = (userId) => {
-
+const getUserVoice = (userId = "default_user") => {
   if (!userId) {
     return null;
   }
@@ -196,7 +180,7 @@ const getUserVoice = (userId) => {
 
   const voiceFile =
     files.find((file) =>
-      /\.(mp3|wav|m4a|ogg)$/i.test(
+      /\.(mp3|wav|m4a|ogg|webm)$/i.test(
         file
       )
     );
