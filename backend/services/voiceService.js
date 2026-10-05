@@ -29,7 +29,7 @@ fs.mkdirSync(USER_VOICE_DIR, {
 });
 
 // ======================================================
-// GOOGLE TTS
+// GOOGLE TTS - FREE
 // ======================================================
 
 const generateGoogleVoice = async ({
@@ -39,21 +39,26 @@ const generateGoogleVoice = async ({
 }) => {
   try {
     if (!text || !text.trim()) {
-      throw new Error(
-        "Narration text is required"
-      );
+      throw new Error("Narration text is required");
     }
 
     console.log(
-      `🎙️ Generating ${language} voice for Scene ${sceneNumber}...`
+      `🎙️ Generating ${language} Google TTS voice for Scene ${sceneNumber}...`
     );
+
+    // Telugu devotional narration:
+    // slow = true gives a calmer and more deliberate delivery.
+    const isTelugu = language === "te";
 
     const audioParts =
       await googleTTS.getAllAudioBase64(
-        text,
+        text.trim(),
         {
           lang: language,
-          slow: false,
+
+          // FREE Google TTS
+          slow: isTelugu,
+
           host: "https://translate.google.com",
         }
       );
@@ -62,19 +67,17 @@ const generateGoogleVoice = async ({
       `✅ Scene ${sceneNumber}: received ${audioParts.length} audio parts`
     );
 
-    const outputFile =
-      path.join(
-        AUDIO_DIR,
-        `voice_scene_${sceneNumber}_${Date.now()}.mp3`
-      );
+    const outputFile = path.join(
+      AUDIO_DIR,
+      `voice_scene_${sceneNumber}_${Date.now()}.mp3`
+    );
 
-    const buffers =
-      audioParts.map((part) =>
-        Buffer.from(
-          part.base64,
-          "base64"
-        )
-      );
+    const buffers = audioParts.map((part) =>
+      Buffer.from(
+        part.base64,
+        "base64"
+      )
+    );
 
     fs.writeFileSync(
       outputFile,
@@ -89,7 +92,7 @@ const generateGoogleVoice = async ({
 
   } catch (error) {
     console.error(
-      `❌ Voice generation failed for Scene ${sceneNumber}:`,
+      `❌ Google TTS generation failed for Scene ${sceneNumber}:`,
       error.message
     );
 
@@ -107,33 +110,25 @@ const saveUserVoice = ({
 }) => {
   try {
     if (!sourceFile) {
-      throw new Error(
-        "Voice file is required"
-      );
+      throw new Error("Voice file is required");
     }
 
-    const userVoiceDir =
-      path.join(
-        USER_VOICE_DIR,
-        String(userId || "default_user")
-      );
-
-    fs.mkdirSync(
-      userVoiceDir,
-      {
-        recursive: true,
-      }
+    const userVoiceDir = path.join(
+      USER_VOICE_DIR,
+      String(userId || "default_user")
     );
 
-    const extension =
-      path.extname(sourceFile) ||
-      ".mp3";
+    fs.mkdirSync(userVoiceDir, {
+      recursive: true,
+    });
 
-    const destination =
-      path.join(
-        userVoiceDir,
-        `voice${extension}`
-      );
+    const extension =
+      path.extname(sourceFile) || ".mp3";
+
+    const destination = path.join(
+      userVoiceDir,
+      `voice${extension}`
+    );
 
     fs.copyFileSync(
       sourceFile,
@@ -160,16 +155,17 @@ const saveUserVoice = ({
 // GET USER VOICE
 // ======================================================
 
-const getUserVoice = (userId = "default_user") => {
+const getUserVoice = (
+  userId = "default_user"
+) => {
   if (!userId) {
     return null;
   }
 
-  const userDir =
-    path.join(
-      USER_VOICE_DIR,
-      String(userId)
-    );
+  const userDir = path.join(
+    USER_VOICE_DIR,
+    String(userId)
+  );
 
   if (!fs.existsSync(userDir)) {
     return null;
@@ -178,12 +174,9 @@ const getUserVoice = (userId = "default_user") => {
   const files =
     fs.readdirSync(userDir);
 
-  const voiceFile =
-    files.find((file) =>
-      /\.(mp3|wav|m4a|ogg|webm)$/i.test(
-        file
-      )
-    );
+  const voiceFile = files.find((file) =>
+    /\.(mp3|wav|m4a|ogg|webm)$/i.test(file)
+  );
 
   if (!voiceFile) {
     return null;

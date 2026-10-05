@@ -583,9 +583,6 @@ const normalizeSceneImages = (
   return [];
 };
 
-// ======================================================
-// CREATE IMAGE SEGMENT
-// ======================================================
 
 const createImageSegment = async ({
   imagePath,
@@ -594,21 +591,55 @@ const createImageSegment = async ({
   index,
   sceneNumber,
 }) => {
-  checkFileExists(
-    imagePath
-  );
+  checkFileExists(imagePath);
 
-  const safeDuration =
-    Math.max(
-      0.5,
-      Number(duration) || 5
-    );
+  const safeDuration = Math.max(
+    0.5,
+    Number(duration) || 5
+  );
 
   console.log(
     `🖼️ Scene ${sceneNumber} Image ${
       index + 1
     }: ${safeDuration.toFixed(2)} sec`
   );
+
+  /*
+   * Cinematic Ken Burns effect
+   *
+   * Slow zoom creates movement even when
+   * the source is a single photograph.
+   *
+   * Different images alternate between:
+   *  - slow zoom in
+   *  - slow zoom out
+   */
+
+  const frames = Math.max(
+    30,
+    Math.ceil(safeDuration * 30)
+  );
+
+  const zoomDirection =
+    index % 2 === 0
+      ? "in"
+      : "out";
+
+  let zoomFilter;
+
+  if (zoomDirection === "in") {
+    zoomFilter =
+      `zoompan=z='min(zoom+0.0008,1.12)':` +
+      `x='iw/2-(iw/zoom/2)':` +
+      `y='ih/2-(ih/zoom/2)':` +
+      `d=${frames}:s=1280x720:fps=30`;
+  } else {
+    zoomFilter =
+      `zoompan=z='if(eq(on,0),1.12,max(1.0,zoom-0.0008))':` +
+      `x='iw/2-(iw/zoom/2)':` +
+      `y='ih/2-(ih/zoom/2)':` +
+      `d=${frames}:s=1280x720:fps=30`;
+  }
 
   await runFFmpeg([
     "-y",
@@ -619,15 +650,16 @@ const createImageSegment = async ({
     "-i",
     imagePath,
 
-    "-t",
-    safeDuration.toFixed(3),
-
     "-vf",
     [
-      "scale=1280:720:force_original_aspect_ratio=decrease",
-      "pad=1280:720:(ow-iw)/2:(oh-ih)/2",
+      "scale=1920:1080:force_original_aspect_ratio=increase",
+      "crop=1920:1080",
+      zoomFilter,
       "format=yuv420p",
     ].join(","),
+
+    "-frames:v",
+    String(frames),
 
     "-r",
     "30",
@@ -638,19 +670,17 @@ const createImageSegment = async ({
     "-preset",
     "veryfast",
 
-    "-tune",
-    "stillimage",
-
-    "-an",
-
     "-pix_fmt",
     "yuv420p",
+
+    "-an",
 
     outputPath,
   ]);
 
   return outputPath;
 };
+
 
 // ======================================================
 // JOIN IMAGE SEGMENTS

@@ -10,7 +10,9 @@ const {
 const {
   generateCompleteVideo,
 } = require("../services/videoPipelineService");
-
+const {
+  generateSceneImage,
+} = require("../services/imageService");
 const router = express.Router();
 
 // ============================================================
@@ -261,6 +263,122 @@ router.post(
   }
 );
 
+// ============================================================
+// AUTO SELECT IMAGE FOR SCENE
+// ============================================================
+//
+// POST
+// /api/videos/auto-image
+//
+// AI visual description -> Pexels image
+// Image is downloaded locally so final FFmpeg can use it.
+//
+// ============================================================
+
+router.post(
+  "/auto-image",
+  async (req, res) => {
+    try {
+      const {
+        scene,
+        topic,
+        category,
+      } = req.body;
+
+      if (!scene) {
+        return res.status(400).json({
+          success: false,
+          message: "Scene is required.",
+        });
+      }
+
+      if (!scene.visualDescription) {
+        return res.status(400).json({
+          success: false,
+          message:
+            "Scene visual description is required.",
+        });
+      }
+
+      console.log(
+        `🤖 Auto-selecting image for Scene ${
+          scene.sceneNumber || "?"
+        }...`
+      );
+
+      const result =
+        await generateSceneImage({
+          scene,
+          topic: topic || "",
+          category:
+            category || "General",
+        });
+
+      if (!result || !result.imagePath) {
+        throw new Error(
+          `No image generated for Scene ${
+            scene.sceneNumber || "?"
+          }.`
+        );
+      }
+
+      const fileName =
+        path.basename(result.imagePath);
+
+      const image = {
+        id:
+          `ai-pexels-${
+            result.pexelsId || Date.now()
+          }-${Date.now()}`,
+
+        source: "pexels",
+
+        autoSelected: true,
+
+        pexelsId:
+          result.pexelsId || null,
+
+        url:
+          `/images/${fileName}`,
+
+        thumbnail:
+          result.imageUrl || "",
+
+        duration:
+          Number(scene.duration) || 5,
+
+        photographer:
+          result.photographer || "",
+
+        searchQuery:
+          result.searchQuery || "",
+      };
+
+      console.log(
+        `✅ Scene ${
+          scene.sceneNumber || "?"
+        } image selected`
+      );
+
+      return res.status(200).json({
+        success: true,
+        image,
+      });
+    } catch (error) {
+      console.error(
+        "❌ Auto image selection failed:",
+        error.message
+      );
+
+      return res.status(500).json({
+        success: false,
+        message:
+          error.message ||
+          "Auto image selection failed.",
+      });
+    }
+  }
+);
 // ============================================================
 // PEXELS SEARCH
 // ============================================================

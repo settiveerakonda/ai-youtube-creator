@@ -14,7 +14,9 @@ const VideoProject = require("./models/VideoProject");
 const {
   generateStructuredScript,
 } = require("./services/scriptService");
-
+const {
+  generateSceneImage,
+} = require("./services/imageService");
 const voiceRoutes = require("./routes/voiceRoutes");
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -605,11 +607,6 @@ const renderSceneVideoWithCaptions =
       )} sec`
     );
 
-    const captionFilters =
-      await createCaptionFiltersForScene({
-        scene,
-        audioPath,
-      });
 
    const baseFilters = [
   "scale=1280:720:force_original_aspect_ratio=decrease",
@@ -617,10 +614,7 @@ const renderSceneVideoWithCaptions =
   "format=yuv420p",
 ];
 
-const videoFilter = [
-  ...baseFilters,
-  ...captionFilters,
-].join(",");
+const videoFilter = baseFilters.join(",");
 
     await runFFmpeg([
       "-y",
@@ -1418,6 +1412,87 @@ app.post(
     }
   }
 );
+// 👇 ఈ కొత్త route ఇక్కడ paste చేయాలి
+
+app.post("/api/videos/auto-image", async (req, res) => {
+  try {
+    const { scene, topic, category } = req.body;
+
+    if (!scene) {
+      return res.status(400).json({
+        success: false,
+        message: "Scene is required.",
+      });
+    }
+
+    console.log(
+      `🖼️ Auto image request received for Scene ${
+        scene.sceneNumber || "?"
+      }`
+    );
+
+    const visualResult = await generateSceneImage({
+      scene,
+      topic: topic || "",
+      category: category || "Stock Market",
+    });
+
+    if (!visualResult || !visualResult.imagePath) {
+      throw new Error("Visual generator returned no image path.");
+    }
+
+    if (!fs.existsSync(visualResult.imagePath)) {
+      throw new Error(
+        `Generated image does not exist: ${visualResult.imagePath}`
+      );
+    }
+
+    const fileName = path.basename(visualResult.imagePath);
+
+    const imageUrl =
+      visualResult.imageUrl ||
+      visualResult.url ||
+      `http://localhost:${PORT}/output/images/${fileName}`;
+
+    return res.status(200).json({
+      success: true,
+      image: {
+        id: visualResult.pexelsId
+          ? `pexels-${visualResult.pexelsId}`
+          : `auto-${scene.sceneNumber || Date.now()}-${Date.now()}`,
+
+        source: visualResult.source || "pexels",
+        url: imageUrl,
+        thumbnail: visualResult.thumbnail || imageUrl,
+        photographer: visualResult.photographer || "",
+        photographerUrl: visualResult.photographerUrl || "",
+        pexelsUrl: visualResult.pexelsUrl || "",
+        pexelsId: visualResult.pexelsId || "",
+        searchQuery: visualResult.searchQuery || "",
+        relevanceScore: visualResult.relevanceScore || 0,
+        imagePath: visualResult.imagePath,
+        imageType: visualResult.visualType || "realistic_photo",
+        isDataScene: visualResult.isDataScene === true,
+        dataCard: visualResult.dataCard === true,
+      },
+    });
+
+  } catch (error) {
+    console.error(
+      "❌ Auto image selection failed:",
+      error.response?.data || error.message
+    );
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to select image.",
+      error:
+        error.response?.data?.message ||
+        error.message,
+    });
+  }
+});
+
 
 // ============================================================
 // GET SINGLE PROJECT
@@ -1818,77 +1893,288 @@ app.post("/api/videos/pipeline-process", async (req, res) => {
       generationRound++;
     }
 
-    // Stage 3: Pexels Image Visuals
-    const buildPexelsQuery = (scene) => {
-      const description = String(scene.visualDescription || "")
-        .replace(/[^a-zA-Z0-9\s]/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
+   // ============================================================
+// STAGE 3: INTELLIGENT SCENE VISUALS
+// ============================================================
 
-      const text = description.toLowerCase();
-      const peopleKeywords = [
-        "person", "people", "man", "woman", "investor", "businessman",
-        "family", "student", "trader", "analyst"
-      ];
-      const hasPeople = peopleKeywords.some((word) => text.includes(word));
+console.log(
+  "======================================"
+);
 
-      let query = hasPeople ? `Indian people ${description}` : `India ${description}`;
-      if (topic) query += ` ${topic}`;
+console.log(
+  "🖼️ STAGE 3: INTELLIGENT VISUAL GENERATION"
+);
 
-      return query.split(/\s+/).filter(Boolean).slice(0, 15).join(" ");
-    };
+console.log(
+  "======================================"
+);
 
-    const finalScenes = [];
+const finalScenes = [];
 
-    for (const scene of compiledScenes) {
-      const searchQuery = buildPexelsQuery(scene);
+for (const scene of compiledScenes) {
+  const sceneNumber =
+    scene.sceneNumber || "?";
 
-      const response = await axios.get("https://api.pexels.com/v1/search", {
-        headers: { Authorization: process.env.PEXELS_API_KEY },
-        params: {
-          query: searchQuery,
-          orientation: "landscape",
-          size: "large",
-          per_page: 15,
-        },
-        timeout: 30000,
-      });
+  console.log(
+    `\n🎨 Processing visual for Scene ${sceneNumber}...`
+  );
 
-      const photos = response.data?.photos || [];
-      if (photos.length === 0) {
-        throw new Error(`No Pexels images found for "${searchQuery}"`);
+  console.log(
+    `📝 Narration: ${
+      scene.narrationText || ""
+    }`
+  );
+
+  console.log(
+    `👁️ Visual description: ${
+      scene.visualDescription || ""
+    }`
+  );
+
+  console.log(
+    `🎯 Visual type: ${
+      scene.visualType || "unknown"
+    }`
+  );
+
+  let visualResult = null;
+  let lastVisualError = null;
+
+  // ----------------------------------------------------------
+  // RETRY VISUAL GENERATION
+  // ----------------------------------------------------------
+
+  for (
+    let attempt = 1;
+    attempt <= 3;
+    attempt++
+  ) {
+    try {
+      console.log(
+        `🖼️ Scene ${sceneNumber} visual attempt ${attempt}/3`
+      );
+
+      visualResult =
+        await generateSceneImage({
+          scene,
+          topic:
+            topic || "",
+          category:
+            category ||
+            "Stock Market",
+        });
+
+      if (
+        !visualResult ||
+        !visualResult.imagePath
+      ) {
+        throw new Error(
+          "Visual generator returned no image path."
+        );
       }
 
-      const sortedPhotos = [...photos].sort((a, b) => {
-        const aPixels = Number(a.width || 0) * Number(a.height || 0);
-        const bPixels = Number(b.width || 0) * Number(b.height || 0);
-        return bPixels - aPixels;
-      });
+      if (
+        !fs.existsSync(
+          visualResult.imagePath
+        )
+      ) {
+        throw new Error(
+          `Generated visual file does not exist: ${visualResult.imagePath}`
+        );
+      }
 
-      const selectedPhoto = sortedPhotos[0];
-      const imageUrlFromPexels =
-        selectedPhoto?.src?.landscape ||
-        selectedPhoto?.src?.large2x ||
-        selectedPhoto?.src?.large;
+      console.log(
+        `✅ Scene ${sceneNumber} visual generated successfully`
+      );
 
-      const imageFileName = `scene_${scene.sceneNumber}_${Date.now()}.jpg`;
-      const imagePath = path.join(imageUploadFolder, imageFileName);
-      await downloadImage(imageUrlFromPexels, imagePath);
+      break;
 
-      const localImageUrl = `http://localhost:${PORT}/output/images/${imageFileName}`;
+    } catch (error) {
+      lastVisualError =
+        error;
 
-      finalScenes.push({
-        ...scene,
-        imageUrl: localImageUrl,
-        imagePath,
-        imageSource: "Pexels",
-        imageCredit: {
-          photographer: selectedPhoto.photographer,
-          photographerUrl: selectedPhoto.photographer_url,
-          pexelsUrl: selectedPhoto.url,
-        },
-      });
+      console.warn(
+        `⚠️ Scene ${sceneNumber} visual attempt ${attempt} failed: ${
+          error.message
+        }`
+      );
+
+      if (attempt < 3) {
+        await new Promise(
+          (resolve) =>
+            setTimeout(
+              resolve,
+              1000 * attempt
+            )
+        );
+      }
     }
+  }
+
+  // ----------------------------------------------------------
+  // DO NOT SILENTLY CONTINUE
+  // ----------------------------------------------------------
+
+  if (
+    !visualResult ||
+    !visualResult.imagePath
+  ) {
+    throw new Error(
+      `Could not generate visual for Scene ${sceneNumber} after 3 attempts. ${
+        lastVisualError?.message || ""
+      }`
+    );
+  }
+
+  // ----------------------------------------------------------
+  // BUILD LOCAL IMAGE URL
+  // ----------------------------------------------------------
+
+  let imageUrl =
+    visualResult.url;
+
+  if (!imageUrl) {
+    const fileName =
+      path.basename(
+        visualResult.imagePath
+      );
+
+    imageUrl =
+      `http://localhost:${PORT}/output/images/${fileName}`;
+  }
+
+  // ----------------------------------------------------------
+  // DATA CARD OR PEXELS
+  // ----------------------------------------------------------
+
+  const isDataCard =
+    visualResult.isDataScene === true ||
+    visualResult.dataCard === true ||
+    visualResult.source ===
+      "market-data" ||
+    visualResult.source ===
+      "data-card";
+
+  // ----------------------------------------------------------
+  // FINAL SCENE
+  // ----------------------------------------------------------
+
+  finalScenes.push({
+    ...scene,
+
+    imageUrl,
+
+    imagePath:
+      visualResult.imagePath,
+
+    imageSource:
+      isDataCard
+        ? "Market Data"
+        : "Pexels",
+
+    imageType:
+      isDataCard
+        ? "data-card"
+        : "pexels",
+
+    visualType:
+      visualResult.visualType ||
+      scene.visualType ||
+      "realistic_photo",
+
+    isDataScene:
+      isDataCard,
+
+    dataCard:
+      isDataCard,
+
+    dataType:
+      visualResult.dataType ||
+      visualResult.type ||
+      null,
+
+    marketPrice:
+      visualResult.price ??
+      null,
+
+    marketChange:
+      visualResult.change ??
+      null,
+
+    marketChangePercent:
+      visualResult.changePercent ??
+      null,
+
+    imageCredit:
+      isDataCard
+        ? null
+        : {
+            photographer:
+              visualResult.photographer ||
+              "",
+
+            photographerUrl:
+              visualResult.photographerUrl ||
+              "",
+
+            pexelsUrl:
+              visualResult.pexelsUrl ||
+              "",
+          },
+
+    imageSearchQuery:
+      visualResult.searchQuery ||
+      "",
+
+    imageRelevanceScore:
+      visualResult.relevanceScore ||
+      0,
+  });
+
+  // ----------------------------------------------------------
+  // LOG
+  // ----------------------------------------------------------
+
+  if (isDataCard) {
+    console.log(
+      `📊 Scene ${sceneNumber}: MARKET DATA CARD`
+    );
+
+    console.log(
+      `📈 Data type: ${
+        visualResult.dataType ||
+        visualResult.type ||
+        "market"
+      }`
+    );
+
+    console.log(
+      `💰 Price: ${
+        visualResult.price ??
+        "--"
+      }`
+    );
+
+  } else {
+    console.log(
+      `🖼️ Scene ${sceneNumber}: RELEVANT PEXELS IMAGE`
+    );
+
+    console.log(
+      `🔎 Search: ${
+        visualResult.searchQuery ||
+        ""
+      }`
+    );
+
+    console.log(
+      `🎯 Relevance score: ${
+        visualResult.relevanceScore ||
+        0
+      }`
+    );
+  }
+}
 
     res.status(200).json({
       success: true,

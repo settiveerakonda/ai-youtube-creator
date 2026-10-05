@@ -2,7 +2,9 @@ const express = require("express");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-
+const {
+  generateGoogleVoice,
+} = require("../services/voiceService");
 const {
   createUserVoice,
   getUserVoices,
@@ -365,7 +367,6 @@ router.delete(
     }
   }
 );
-
 // ======================================================
 // GENERATE VIDEO AUDIO
 // ======================================================
@@ -383,15 +384,12 @@ router.post(
       } = req.body;
 
       if (
-        !Array.isArray(
-          scenes
-        ) ||
+        !Array.isArray(scenes) ||
         scenes.length === 0
       ) {
         return res.status(400).json({
           success: false,
-          message:
-            "Scenes are required.",
+          message: "Scenes are required.",
         });
       }
 
@@ -407,247 +405,129 @@ router.post(
       }
 
       // ==================================================
-      // RESOLVE VOICE
+      // AI VOICE = FREE GOOGLE TTS
       // ==================================================
 
-      let elevenLabsVoiceId =
-        voiceId;
+      if (voiceType === "ai") {
+        console.log(
+          "🎙️ Using FREE Google TTS"
+        );
 
-      let selectedUserVoice =
-        null;
+        const generatedScenes = [];
+
+        for (
+          let index = 0;
+          index < scenes.length;
+          index++
+        ) {
+          const scene = scenes[index];
+
+          const sceneNumber =
+            scene.sceneNumber ||
+            index + 1;
+
+          const narration =
+            String(
+              scene.narrationText || ""
+            ).trim();
+
+          if (!narration) {
+            throw new Error(
+              `Scene ${sceneNumber} narration is empty.`
+            );
+          }
+
+          console.log(
+            `🎙️ Generating Google voice for Scene ${sceneNumber}...`
+          );
+
+          const audioPath =
+            await generateGoogleVoice({
+              text: narration,
+
+              language:
+                language === "Telugu"
+                  ? "te"
+                  : "en",
+
+              sceneNumber,
+            });
+
+          if (
+            !audioPath
+          ) {
+            throw new Error(
+              `Google TTS returned no audio for Scene ${sceneNumber}.`
+            );
+          }
+
+          const audioFileName =
+            path.basename(
+              audioPath
+            );
+
+          const audioUrl =
+            `/audio/${audioFileName}`;
+
+          generatedScenes.push({
+            ...scene,
+
+            sceneNumber,
+
+            audioUrl,
+
+            audioPath,
+
+            voiceType: "ai",
+
+            language:
+              language || "Telugu",
+          });
+
+          console.log(
+            `✅ Scene ${sceneNumber} Google audio saved`
+          );
+        }
+
+        return res.json({
+          success: true,
+
+          message:
+            "Free Google TTS audio generated successfully.",
+
+          scenes:
+            generatedScenes,
+
+          voiceType: "ai",
+
+          language:
+            language || "Telugu",
+
+          voiceId: null,
+
+          userVoiceId: null,
+        });
+      }
+
+      // ==================================================
+      // USER VOICE
+      // ==================================================
+      //
+      // Keep existing user-voice functionality separate.
+      // User cloned voices can continue using the existing
+      // userVoiceService / ElevenLabs implementation.
+      //
+      // ==================================================
 
       if (
         voiceType === "user"
       ) {
-        if (!userVoiceId) {
-          return res.status(400).json({
-            success: false,
-            message:
-              "Please select your voice.",
-          });
-        }
-
-        selectedUserVoice =
-          await getUserVoice(
-            userVoiceId
-          );
-
-        if (
-          selectedUserVoice.status !==
-          "ready"
-        ) {
-          return res.status(400).json({
-            success: false,
-
-            message:
-              "Your voice is not ready yet. Please record your voice again or wait until cloning is complete.",
-          });
-        }
-
-        if (
-          !selectedUserVoice.externalVoiceId
-        ) {
-          return res.status(400).json({
-            success: false,
-
-            message:
-              "No cloned voice ID is available for this voice.",
-          });
-        }
-
-        elevenLabsVoiceId =
-          selectedUserVoice.externalVoiceId;
-
-        console.log(
-          "👤 Using cloned user voice:",
-          elevenLabsVoiceId
-        );
-      }
-
-      // ==================================================
-      // AI VOICE
-      // ==================================================
-
-      if (
-        voiceType === "ai" &&
-        !elevenLabsVoiceId
-      ) {
         return res.status(400).json({
           success: false,
           message:
-            "AI voice ID is required.",
+            "Custom cloned voice is not enabled in the free AI TTS pipeline yet. Please select AI Voice.",
         });
       }
-
-      const apiKey =
-        process.env.ELEVENLABS_API_KEY;
-
-      if (!apiKey) {
-        return res.status(500).json({
-          success: false,
-          message:
-            "ELEVENLABS_API_KEY is missing.",
-        });
-      }
-
-      // ==================================================
-      // GENERATE SCENE AUDIO
-      // ==================================================
-
-      const generatedScenes =
-        [];
-
-      for (
-        let index = 0;
-        index < scenes.length;
-        index++
-      ) {
-        const scene =
-          scenes[index];
-
-        const sceneNumber =
-          scene.sceneNumber ||
-          index + 1;
-
-        const narration =
-          String(
-            scene.narrationText ||
-              ""
-          ).trim();
-
-        if (!narration) {
-          throw new Error(
-            `Scene ${sceneNumber} narration is empty.`
-          );
-        }
-
-        console.log(
-          `🎙️ Generating ${
-            voiceType === "user"
-              ? "USER"
-              : "AI"
-          } voice for Scene ${sceneNumber}...`
-        );
-
-        const response =
-          await fetch(
-            `https://api.elevenlabs.io/v1/text-to-speech/${elevenLabsVoiceId}`,
-            {
-              method: "POST",
-
-              headers: {
-                "xi-api-key":
-                  apiKey,
-
-                "Content-Type":
-                  "application/json",
-
-                Accept:
-                  "audio/mpeg",
-              },
-
-              body: JSON.stringify({
-                text:
-                  narration,
-
-                // Supports English,
-                // Telugu and Hindi.
-                model_id:
-                  "eleven_multilingual_v2",
-
-                voice_settings: {
-                  stability:
-                    0.5,
-
-                  similarity_boost:
-                    0.75,
-
-                  style:
-                    0,
-
-                  use_speaker_boost:
-                    true,
-                },
-              }),
-            }
-          );
-
-        if (!response.ok) {
-          const errorBody =
-            await response.text();
-
-          throw new Error(
-            `ElevenLabs TTS failed for Scene ${sceneNumber}: ${errorBody}`
-          );
-        }
-   
-        const audioBuffer =
-          Buffer.from(
-            await response.arrayBuffer()
-          );
-
-        const audioFileName =
-          `video_scene_${sceneNumber}_${Date.now()}.mp3`;
-
-        const audioFilePath =
-          path.join(
-            AUDIO_DIR,
-            audioFileName
-          );
-
-        fs.writeFileSync(
-          audioFilePath,
-          audioBuffer
-        );
-
-        const audioUrl =
-          `/audio/${audioFileName}`;
-
-        generatedScenes.push({
-          ...scene,
-
-          sceneNumber,
-
-          audioUrl,
-
-          audioPath:
-            audioFilePath,
-
-          voiceType,
-
-          language:
-            language ||
-            "English",
-        });
-
-        console.log(
-          `✅ Scene ${sceneNumber} audio saved`
-        );
-      }
-
-      return res.json({
-        success: true,
-
-        message:
-          "Audio generated successfully.",
-
-        scenes:
-          generatedScenes,
-
-        voiceType,
-
-        language:
-          language ||
-          "English",
-
-        voiceId:
-          elevenLabsVoiceId,
-
-        userVoiceId:
-          voiceType === "user"
-            ? userVoiceId
-            : null,
-      });
 
     } catch (error) {
       console.error(
@@ -665,5 +545,4 @@ router.post(
     }
   }
 );
-
 module.exports = router;
