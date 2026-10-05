@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 
-const API_URL = "https://ai-youtube-creator.onrender.com";
+const API_URL = "http://localhost:5000";
 
 const CreateVideoWizard = () => {
   // ============================================================
@@ -58,21 +58,19 @@ const CreateVideoWizard = () => {
   const recordingChunksRef = useRef([]);
 
   const aiVoices = [
-    {
-      id: "telugu-female",
-      name: "Telugu Female",
-      description: "Natural and clear female narration",
-      icon: "👩",
-      elevenLabsId: "EXAVITQu4vr4xnSDxMaL",
-    },
-    {
-      id: "telugu-male",
-      name: "Telugu Male",
-      description: "Professional and confident male narration",
-      icon: "👨",
-      elevenLabsId: "CwhRBWXzGAHq8TQ4Fs17",
-    },
-  ];
+  {
+    id: "telugu-female",
+    name: "Telugu Female",
+    description: "Natural and clear Telugu narration",
+    icon: "👩",
+  },
+  {
+    id: "telugu-male",
+    name: "Telugu Male",
+    description: "Natural and clear Telugu narration",
+    icon: "👨",
+  },
+];
 
   const steps = [
     { number: 1, title: "Setup", icon: "⚙️" },
@@ -571,7 +569,94 @@ const uploadUserVoice = async () => {
     setEditedScript(JSON.parse(JSON.stringify(generatedScript)));
     setIsEditingScript(false);
   };
+// ============================================================
+// AUTO SELECT IMAGES FOR ALL SCENES
+// ============================================================
 
+const generateAutoImages = async (scenes) => {
+  const updatedScenes = [];
+
+  for (let index = 0; index < scenes.length; index++) {
+    const scene = scenes[index];
+
+    setLoadingMessage(
+      `🖼️ Selecting image for Scene ${
+        index + 1
+      }/${scenes.length}...`
+    );
+
+    let lastError = null;
+    let image = null;
+
+    // Retry up to 3 times
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const response = await axios.post(
+          `${API_URL}/api/videos/auto-image`,
+          {
+            scene,
+            topic: formData.topic,
+            category: formData.category,
+          }
+        );
+
+        if (
+          !response.data.success ||
+          !response.data.image
+        ) {
+          throw new Error(
+            response.data.message ||
+              "No image returned."
+          );
+        }
+
+        image = response.data.image;
+        break;
+      } catch (error) {
+        lastError = error;
+
+        console.warn(
+          `⚠️ Scene ${
+            index + 1
+          } image attempt ${attempt}/3 failed`
+        );
+
+        if (attempt < 3) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, 1000)
+          );
+        }
+      }
+    }
+
+    if (!image) {
+      throw new Error(
+        `Could not select image for Scene ${
+          index + 1
+        } after 3 attempts.\n\n${
+          lastError?.message || ""
+        }`
+      );
+    }
+
+    updatedScenes.push({
+      ...scene,
+
+      images: [
+        {
+          ...image,
+
+          // AI-selected image covers
+          // the complete scene by default
+          duration:
+            Number(scene.duration) || 5,
+        },
+      ],
+    });
+  }
+
+  return updatedScenes;
+};
   const generateVideoAudio = async () => {
     if (!generatedScript.length) {
       alert("No script available.");
@@ -593,10 +678,18 @@ const uploadUserVoice = async () => {
       };
 
       if (voiceType === "ai") {
-        const selectedVoice = aiVoices.find((v) => v.id === selectedAIVoice);
-        if (!selectedVoice) throw new Error("Please select an AI voice.");
-        payload.voiceId = selectedVoice.elevenLabsId;
-      }
+  const selectedVoice = aiVoices.find(
+    (v) => v.id === selectedAIVoice
+  );
+
+  if (!selectedVoice) {
+    throw new Error("Please select an AI voice.");
+  }
+
+  // FREE Google TTS
+  // Voice selection is kept for UI compatibility.
+  payload.voiceId = selectedAIVoice;
+}
 
       if (voiceType === "user") {
         payload.userVoiceId = userVoiceId;
@@ -610,19 +703,56 @@ const uploadUserVoice = async () => {
       const audioScenes = response.data.scenes || [];
       if (!audioScenes.length) throw new Error("No audio scenes returned.");
 
-      const preparedScenes = audioScenes.map((scene, index) => ({
-        ...scene,
-        sceneNumber: scene.sceneNumber || index + 1,
-        duration: Number(scene.duration) || 30,
-        images: Array.isArray(scene.images) ? scene.images : [],
-      }));
+      const preparedScenes = audioScenes.map(
+  (scene, index) => ({
+    ...scene,
 
-      setGeneratedScript(preparedScenes);
-      setEditedScript(preparedScenes);
-      setVisualScenes(preparedScenes);
-      setAudioReady(true);
-      setCurrentStep(4);
-    } catch (error) {
+    sceneNumber:
+      scene.sceneNumber ||
+      index + 1,
+
+    duration:
+      Number(scene.duration) || 30,
+
+    images: [],
+  })
+);
+
+// ========================================================
+// AUTO IMAGE SELECTION
+// ========================================================
+
+setLoadingMessage(
+  "🖼️ AI is selecting the best image for every scene..."
+);
+
+const scenesWithImages =
+  await generateAutoImages(
+    preparedScenes
+  );
+
+// ========================================================
+// SAVE FINAL SCENES
+// ========================================================
+
+setGeneratedScript(
+  scenesWithImages
+);
+
+setEditedScript(
+  scenesWithImages
+);
+
+setVisualScenes(
+  scenesWithImages
+);
+
+setAudioReady(true);
+
+setCurrentStep(4);
+    } 
+    
+    catch (error) {
       console.error("Audio generation error:", error);
       alert(error.response?.data?.message || error.response?.data?.error || error.message || "Audio generation failed.");
     } finally {
